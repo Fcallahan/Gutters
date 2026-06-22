@@ -1,0 +1,46 @@
+:root {
+  --gallery-bg: #0b0f17;
+  --gallery-panel: #131a26;
+  --gallery-line: #233044;
+  --gallery-text: #e6edf6;
+  --gallery-muted: #8a98ad;
+  --gallery-accent: #4f8cff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--gallery-bg);
+  color: var(--gallery-text);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Scrollbar polish (gallery shell) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3a52;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

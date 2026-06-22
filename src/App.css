@@ -1,0 +1,250 @@
+/* ---- Gallery (home) ---- */
+.gallery {
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(79, 140, 255, 0.18), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(192, 132, 252, 0.14), transparent 55%),
+    var(--gallery-bg);
+}
+
+.gallery__inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 72px 24px 48px;
+}
+
+.gallery__kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gallery-accent);
+  margin-bottom: 14px;
+}
+
+.gallery__title {
+  font-size: clamp(28px, 5vw, 46px);
+  line-height: 1.05;
+  margin: 0 0 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.gallery__lede {
+  max-width: 620px;
+  color: var(--gallery-muted);
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 0 44px;
+}
+.gallery__lede strong {
+  color: var(--gallery-text);
+}
+
+.gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  text-align: left;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
+  border: 1px solid var(--gallery-line);
+  border-radius: 18px;
+  padding: 22px;
+  color: var(--gallery-text);
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  position: relative;
+  overflow: hidden;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+.card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+  box-shadow: 0 18px 40px -20px var(--accent);
+}
+
+.card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.card__num {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+.card__status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--gallery-line);
+  color: var(--gallery-muted);
+}
+.card__status--interactive {
+  color: #0b0f17;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.card__name {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.card__tagline {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+.card__blurb {
+  color: var(--gallery-muted);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0 0 20px;
+  min-height: 84px;
+}
+.card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--gallery-line);
+  padding-top: 14px;
+}
+.card__audience {
+  font-size: 12px;
+  color: var(--gallery-muted);
+}
+.card__open {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.gallery__foot {
+  margin-top: 48px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gallery-muted);
+}
+
+/* ---- Concept host (when a concept is open) ---- */
+.concept-host {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.concept-host__bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px;
+  background: var(--gallery-panel);
+  border-bottom: 1px solid var(--gallery-line);
+  flex-wrap: wrap;
+}
+.concept-host__back {
+  background: transparent;
+  border: 1px solid var(--gallery-line);
+  color: var(--gallery-text);
+  padding: 7px 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.concept-host__back:hover {
+  border-color: var(--accent);
+}
+.concept-host__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 15px;
+}
+.concept-host__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.concept-host__tag {
+  color: var(--gallery-muted);
+  font-weight: 500;
+  font-size: 13px;
+}
+.concept-host__switch {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.concept-host__switch button {
+  background: transparent;
+  border: 1px solid var(--gallery-line);
+  color: var(--gallery-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.concept-host__switch button:hover {
+  color: var(--gallery-text);
+  border-color: var(--accent);
+}
+.concept-host__switch button.is-active {
+  color: #0b0f17;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.concept-host__stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ---- Shared placeholder for planned concepts ---- */
+.placeholder {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  text-align: center;
+}
+.placeholder__card {
+  max-width: 460px;
+}
+.placeholder__badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 4px 12px;
+  border-radius: 999px;
+  margin-bottom: 18px;
+}
+.placeholder h2 {
+  font-size: 28px;
+  margin: 0 0 12px;
+}
+.placeholder p {
+  color: var(--gallery-muted);
+  line-height: 1.6;
+}
