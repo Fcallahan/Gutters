@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Prime Gutter Estimator</title>
@@ -843,7 +843,9 @@ function materialList(){
       if(d.outlets) add(dsParts,'Outlet '+szl,{item:"Outlet "+szl,unit:"ea",color:""}).qty+=d.outlets;
       if(d.a) add(dsParts,'A elbow '+szl+"|"+colorName,{item:"A elbow "+szl,unit:"ea",color:colorName}).qty+=d.a;
       if(d.b) add(dsParts,'B elbow '+szl+"|"+colorName,{item:"B elbow "+szl,unit:"ea",color:colorName}).qty+=d.b;
-      if(d.offsets) add(dsParts,'Offset '+szl+"|"+colorName,{item:"Offset "+szl,unit:"ea",color:colorName}).qty+=d.offsets;
+      if(d.o2) add(dsParts,'Offset 2" '+szl+"|"+colorName,{item:'Offset 2" '+szl,unit:"ea",color:colorName}).qty+=d.o2;
+      if(d.o4) add(dsParts,'Offset 4" '+szl+"|"+colorName,{item:'Offset 4" '+szl,unit:"ea",color:colorName}).qty+=d.o4;
+      if(d.o6) add(dsParts,'Offset 6" '+szl+"|"+colorName,{item:'Offset 6" '+szl,unit:"ea",color:colorName}).qty+=d.o6;
     } else if(o.t==="valley"){ valley++; }
   }
   const out=[];
@@ -1088,8 +1090,17 @@ function drawGutter(o){
       bc:empty?"#c8202a":"#1b2530",bw:empty?1.5:1});
     addLabelBox("seglen",o.id,box.x,box.y,box.w,box.h,{seg:i});
   }
+  drawVertexHandles(o,pts);
 }
 function line(pts){ ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke(); }
+// hollow draggable dots at each vertex of the sole selected run (drag a dot = move that corner)
+function drawVertexHandles(o,pts){
+  if(sel.size!==1 || !sel.has(o.id)) return;
+  ctx.save();
+  ctx.fillStyle="#fff"; ctx.strokeStyle="#2b7fd0"; ctx.lineWidth=2.5;
+  for(const p of pts){ ctx.beginPath();ctx.arc(p.x,p.y,6,0,7);ctx.fill();ctx.stroke(); }
+  ctx.restore();
+}
 function drawCapMark(end,prev,on){
   if(!on) return;
   const dx=end.x-prev.x,dy=end.y-prev.y,L=Math.hypot(dx,dy)||1;
@@ -1126,6 +1137,7 @@ function drawCustom(o){
     const box=segChip(o,i,mx,my,empty?"+":ftStr(ft),{size:_csz,pad:Math.max(2,_csz*0.42),bold:true,bg:empty?"#fff":"#1b2530",fg:empty?"#c8202a":"#fff",bc:empty?"#c8202a":"#1b2530",bw:empty?1.5:1});
     addLabelBox("seglen",o.id,box.x,box.y,box.w,box.h,{seg:i});
   }
+  drawVertexHandles(o,pts);
 }
 
 function drawDS(o){
@@ -1200,6 +1212,13 @@ function drawText(o){
   let yy=s.y+7*cam.scale;
   for(const ln of textLines(o)){ ctx.fillText(ln, s.x+8*cam.scale, yy); yy+=lh*cam.scale; }
   ctx.restore();
+  if(sel.has(o.id)){
+    const ts=11, tx=s.x+w, ty=s.y+h;
+    ctx.save();
+    ctx.beginPath();ctx.moveTo(tx-ts,ty);ctx.lineTo(tx,ty);ctx.lineTo(tx,ty-ts);ctx.closePath();
+    ctx.fillStyle="#2b7fd0";ctx.fill();
+    ctx.restore();
+  }
   addLabelBox("text",o.id,s.x,s.y,w,h);
 }
 
@@ -1361,6 +1380,7 @@ let gutterExtend=null; // {runId, end:0|1} when extending an existing run
 let cursorW=null;      // world cursor
 let marquee=null;
 let snap=true;
+let angleSnap=false;
 let hlColor="#ffe24d", hlWidth=18;
 let stampPresets=[
   {text:"2-STORY",color:"#c8202a"},
@@ -1480,7 +1500,8 @@ function buildOptbar(){
       + dv + g('<label><input type="checkbox" id="opAuto" '+(P.settings.autoMeasure?"checked":"")+'> Auto-measure</label>')
       + g('<label>ft / square</label><input id="opFps" type="number" min="0.5" step="0.5" value="'+(P.settings.feetPerSquare)+'" style="width:60px">')
       + g('<button class="chip" id="opCalib">Calibrate…</button>')
-      + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap to grid</label>');
+      + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap to grid</label>')
+      + g('<label><input type="checkbox" id="opAngleSnap" '+(angleSnap?"checked":"")+'> 22.5° angles</label>');
   } else if(tool==="ds"){
     const dsz=(dsDrawSize||P.settings.defaultDownspoutSize);
     h+='<span class="ob-title">'+dsz.replace("x","×")+' DOWNSPOUT</span>'+dv
@@ -1550,6 +1571,7 @@ function wireOptbar(){
   if(byId("opGutSize")) byId("opGutSize").onchange=e=>{ gutterDrawSize=e.target.value||null; };
   if(byId("opGutColor")) byId("opGutColor").onchange=e=>{ gutterDrawColor=e.target.value; byId("opGutSw").style.background=colorHex(e.target.value); };
   if(byId("opSnap")) byId("opSnap").onchange=e=>snap=e.target.checked;
+  if(byId("opAngleSnap")) byId("opAngleSnap").onchange=e=>angleSnap=e.target.checked;
   if(byId("opAuto")) byId("opAuto").onchange=e=>{ P.settings.autoMeasure=e.target.checked; setHint(e.target.checked?("Auto-measure on — each grid square = "+P.settings.feetPerSquare+" ft. Lengths fill in as you draw."):toolHint(tool)); };
   if(byId("opFps")) byId("opFps").onchange=e=>{ P.settings.feetPerSquare=Math.max(0.5,+e.target.value||1); refreshAll(); };
   if(byId("opCalib")) byId("opCalib").onclick=startCalibration;
@@ -1589,6 +1611,15 @@ let arrowColor="#c8202a", arrowWidth=3;
 function snapW(p){
   if(!snap) return p;
   return {x:Math.round(p.x/(GRID/1))*(GRID/1), y:Math.round(p.y/(GRID/1))*(GRID/1)};
+}
+function snapAngleW(p, prev){
+  if(!angleSnap || !prev) return p;
+  const dx=p.x-prev.x, dy=p.y-prev.y;
+  const dist=Math.sqrt(dx*dx+dy*dy);
+  if(dist<1) return p;
+  const step=Math.PI/8; // 22.5°
+  const snapped=Math.round(Math.atan2(dy,dx)/step)*step;
+  return {x:prev.x+dist*Math.cos(snapped), y:prev.y+dist*Math.sin(snapped)};
 }
 
 /* ============================================================ */
@@ -1643,21 +1674,22 @@ function hitTest(pt){
       return {objId:b.objId,kind:b.kind,seg:b.seg,box:b};
     }
   }
-  // 2) geometry, topmost first
+  // 2) geometry, topmost first. Wider tolerance for touch (fat-finger friendly).
+  const TOL = lastPtrType==="touch" ? 16 : 9;
   const ordered=[...P.objects].reverse();
   for(const o of ordered){
     if(o.t==="gutter"){
       const ps=o.pts.map(worldToScreen);
-      for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<8) return {objId:o.id,kind:"gutterline",seg:i}; }
+      for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<TOL) return {objId:o.id,kind:"gutterline",seg:i}; }
     } else if(o.t==="custom"){
       const ps=o.pts.map(worldToScreen);
-      for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<8) return {objId:o.id,kind:"customline",seg:i}; }
+      for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<TOL) return {objId:o.id,kind:"customline",seg:i}; }
     } else if(o.t==="arrow"){
       const a=worldToScreen({x:o.x1,y:o.y1}),b=worldToScreen({x:o.x2,y:o.y2});
-      if(ptSegDist(pt,a,b)<8) return {objId:o.id,kind:"arrowline"};
+      if(ptSegDist(pt,a,b)<TOL) return {objId:o.id,kind:"arrowline"};
     } else if(o.t==="hl"){
       const ps=o.pts.map(worldToScreen);
-      for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<(o.width||16)*cam.scale/2+4) return {objId:o.id,kind:"hlline"}; }
+      for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<(o.width||16)*cam.scale/2+TOL/2) return {objId:o.id,kind:"hlline"}; }
     }
   }
   return null;
@@ -1671,15 +1703,24 @@ function arrowHandleHit(pt){
   if(Math.hypot(pt.x-b.x,pt.y-b.y)<8) return {o,end:1};
   return null;
 }
-/* vertex handle of a selected gutter/custom run */
+/* vertex handle of a selected gutter/custom run (only draggable once the run is selected) */
 function gutterVertexHit(pt){
-  const ids=activeRunIds(); if(ids.size!==1) return null;
-  const o=objById([...ids][0]); if(!o||(o.t!=="gutter"&&o.t!=="custom")||!o.pts) return null;
-  for(let i=0;i<o.pts.length;i++){
-    const s=worldToScreen(o.pts[i]);
-    if(Math.hypot(pt.x-s.x,pt.y-s.y)<11) return {o,idx:i};
+  if(sel.size!==1) return null;
+  const o=objById([...sel][0]); if(!o||(o.t!=="gutter"&&o.t!=="custom")||!o.pts) return null;
+  const ps=o.pts.map(worldToScreen);
+  const baseR = lastPtrType==="touch" ? 11 : 7;
+  let best=null, bestD=Infinity;
+  for(let i=0;i<ps.length;i++){
+    const s=ps[i];
+    // cap the corner zone to <40% of the shortest adjacent on-screen segment,
+    // so the middle of every segment is always free to move the WHOLE run.
+    let cap=baseR;
+    if(i>0)        cap=Math.min(cap, 0.4*Math.hypot(ps[i].x-ps[i-1].x, ps[i].y-ps[i-1].y));
+    if(i<ps.length-1) cap=Math.min(cap, 0.4*Math.hypot(ps[i].x-ps[i+1].x, ps[i].y-ps[i+1].y));
+    const d=Math.hypot(pt.x-s.x, pt.y-s.y);
+    if(d<cap && d<bestD){ best={o,idx:i}; bestD=d; }
   }
-  return null;
+  return best;
 }
 // when a shared corner vertex moves, drag any other run's coincident endpoint with it
 function moveWeldedVertices(run, oldP, newP){
@@ -1714,6 +1755,7 @@ function translateInto(o,clone,dx,dy){
 /* POINTER EVENTS                                               */
 /* ============================================================ */
 let press=null, panning=null, spaceDown=false, arrowDrag=null, textResize=null, vertexDrag=null;
+let lastPtrType="mouse";   // updated on pointerdown; widens hit tolerance for touch
 let calib=null;   // {a, b} during scale calibration
 let lastClickT=0, lastClickPt=null;
 const activePointers=new Map();   // pointerId -> {x,y} (client coords) for multitouch
@@ -1759,6 +1801,7 @@ function applyGesture(){
 }
 
 function onDown(e){
+  lastPtrType=e.pointerType||"mouse";
   if(e.pointerType==="touch"){
     activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(activePointers.size===2){
@@ -1797,6 +1840,7 @@ function onDown(e){
     canvas.setPointerCapture(e.pointerId); canvas.style.cursor="grabbing"; return;
   }
   if(e.button!==0) return;
+  if(editing && editing.kind==="dsnote") return; // keypad stays open until ✓ Done
   commitEditor();
   const pt=evtPos(e); const w=screenToWorld(pt);
   cursorW=snapW(w);
@@ -1804,24 +1848,19 @@ function onDown(e){
   canvas.setPointerCapture(e.pointerId);
 
   if(tool==="select"){
-    // handles first
+    // priority: arrow/text handles, then vertex handles of an already-selected run,
+    // then any line/object body (drag = move whole run), then empty space = marquee.
     const ah=arrowHandleHit(pt); if(ah){ arrowDrag={o:ah.o,end:ah.end}; return; }
     const th=textHandleHit(pt); if(th){ textResize={o:th,w0:th.w,h0:th.h,pt}; return; }
     const gv=gutterVertexHit(pt); if(gv){ vertexDrag={o:gv.o,idx:gv.idx,oldPos:{x:gv.o.pts[gv.idx].x,y:gv.o.pts[gv.idx].y}}; return; }
     const hit=hitTest(pt);
     if(hit){
-      // dragging a measurement label repositions just the label, not the object
-      if(hit.kind==="seglen" || hit.kind==="dsnote"){
-        const o=objById(hit.objId);
-        let startOff={x:0,y:0};
-        if(o){ const cur=(hit.kind==="dsnote")?(o.noteOff):(o.segLabelOff&&o.segLabelOff[hit.seg]); if(cur) startOff={x:cur.x||0,y:cur.y||0}; }
-        press={pt,mode:"moveLabel",hit,startOff,moved:false};
-        draw(); return;
-      }
-      // capture clones so a drag moves the hit run (and anything already selected)
+      // tapping a label/chip edits it (handled in onUp); dragging it moves the whole run.
+      // capture clones so a drag moves the hit object (and anything already selected)
       const moveIds=new Set(sel); moveIds.add(hit.objId);
-      const clones={}; moveIds.forEach(id=>{ const ob=objById(id); if(ob) clones[id]=JSON.parse(JSON.stringify(ob)); });
-      press={pt,mode:"maybeMove",hit,clones,moved:false};
+      const ids=[...moveIds];                       // keep real id values (numbers)
+      const clones={}; ids.forEach(id=>{ const ob=objById(id); if(ob) clones[id]=JSON.parse(JSON.stringify(ob)); });
+      press={pt,mode:"maybeMove",hit,ids,clones,moved:false};
     }else{
       if(!e.shiftKey){ sel.clear(); segSel.clear(); }
       press={pt,mode:"marquee",moved:false};
@@ -1844,7 +1883,9 @@ function onDown(e){
     } else {
       // snap onto an existing gutter end (forms a clean corner / closes a loop), else grid
       const hit=findGutterEndNear(w);
-      drawing.pts.push(hit ? {x:hit.pt.x,y:hit.pt.y} : snapW(w));
+      const prev=drawing.pts[drawing.pts.length-1];
+      const np=hit ? {x:hit.pt.x,y:hit.pt.y} : snapAngleW(snapW(w), prev);
+      drawing.pts.push(np);
     }
     draw(); return;
   }
@@ -1888,12 +1929,22 @@ function onMove(e){
     draw(); return;
   }
   // hover cursor for drawing tools
-  if(["gutter","custom","ds","valley","stamp","arrow","text","hl"].includes(tool)){ cursorW=snapW(w); }
+  if(["gutter","custom","ds","valley","stamp","arrow","text","hl"].includes(tool)){
+    let cw=snapW(w);
+    if(drawing && (drawing.t==="gutter"||drawing.t==="custom") && drawing.pts.length>0){
+      cw=snapAngleW(cw, drawing.pts[drawing.pts.length-1]);
+    }
+    cursorW=cw;
+  }
 
   if(arrowDrag){ const o=arrowDrag.o; if(arrowDrag.end===0){o.x1=w.x;o.y1=w.y;}else{o.x2=w.x;o.y2=w.y;} draw(); return; }
   if(vertexDrag){
     const o=vertexDrag.o, idx=vertexDrag.idx;
-    const np=snapW(w);
+    let np=snapW(w);
+    if(o.t==="gutter"||o.t==="custom"){
+      const ref = idx>0 ? o.pts[idx-1] : (o.pts.length>1 ? o.pts[1] : null);
+      np=snapAngleW(np, ref);
+    }
     const oldP={x:o.pts[idx].x,y:o.pts[idx].y};
     moveWeldedVertices(o, oldP, np);   // keep connected corners attached
     o.pts[idx]={x:np.x,y:np.y};
@@ -1910,7 +1961,7 @@ function onMove(e){
     if(!press.moved && Math.hypot(dx,dy)>4) press.moved=true;
     if(press.mode==="maybeMove" && press.moved){
       const wdx=dx/cam.scale, wdy=dy/cam.scale;
-      sel.forEach(id=>{ const o=objById(id); if(o&&press.clones[id]) translateInto(o,press.clones[id],wdx,wdy); });
+      (press.ids||[]).forEach(id=>{ const o=objById(id); if(o&&press.clones[id]) translateInto(o,press.clones[id],wdx,wdy); });
       draw();
     } else if(press.mode==="moveLabel" && press.moved){
       const wdx=dx/cam.scale, wdy=dy/cam.scale;
@@ -1959,15 +2010,11 @@ function onUp(e){
       if(!press.moved){
         // click: edit label, select a single segment, or select an object
         if(press.hit && EDITABLE.has(press.hit.kind)){ openEditorFor(press.hit); }
-        else if(press.hit && (press.hit.kind==="gutterline"||press.hit.kind==="customline") && press.hit.seg!=null){
-          if(!e.shiftKey){ sel.clear(); segSel.clear(); }
-          const k=segKey(press.hit.objId,press.hit.seg);
-          if(e.shiftKey && segSel.has(k)) segSel.delete(k); else segSel.add(k);
-          setHint("Segment selected (red). Box-drag over segments to pick more • drag a run to move it • Delete removes the selected segments.");
-        }
         else if(press.hit){
           if(!e.shiftKey){ sel.clear(); segSel.clear(); }
           if(e.shiftKey && sel.has(press.hit.objId)) sel.delete(press.hit.objId); else sel.add(press.hit.objId);
+          const so=objById(press.hit.objId);
+          if(so && (so.t==="gutter"||so.t==="custom")) setHint("Run selected — drag the line to move it • drag a blue dot to move a corner.");
         }
       } else { recordHistory(); }
     } else if(press.mode==="moveLabel"){
@@ -2250,15 +2297,18 @@ function openEditorFor(hit){
   if(hit.kind==="seglen"){
     field=document.createElement("input");
     field.type="number"; field.step="0.1"; field.min="0";
+    field.inputMode="decimal";
     field.value=(o.lengths[hit.seg]===""||o.lengths[hit.seg]==null)?"":o.lengths[hit.seg];
     field.placeholder="ft";
     field.style.width="74px"; field.style.textAlign="center";
     hintTxt="Length (ft) — Enter for next";
   } else if(hit.kind==="dsnote"){
     field=document.createElement("input");
-    field.type="text"; field.value=o.notation||"";
+    field.type="text"; field.inputMode="none"; field.value=o.notation||"";
     field.placeholder="AAA 20"; field.style.width="130px"; field.style.textTransform="uppercase";
-    hintTxt="elbows/offsets + space + feet";
+    field.readOnly=true;
+    hintTxt='A/B=elbows · 2/4/6=offset size · space + feet';
+    // custom keypad built after FE is appended
   } else if(hit.kind==="stamp"){
     field=document.createElement("input");
     field.type="text"; field.value=o.text||""; field.style.width="150px"; field.style.textTransform="uppercase";
@@ -2269,11 +2319,70 @@ function openEditorFor(hit){
     field.style.width=Math.max(120,lb.w-2)+"px";
     field.style.fontFamily=(o.font||"Arial");
     field.style.fontWeight="400";
-    hintTxt="Note text — Shift+Enter for new line";
+    hintTxt="Enter for new line — ✓ Done to finish";
   }
   FE.appendChild(field);
   const hintEl=document.createElement("div"); hintEl.className="fe-hint"; hintEl.textContent=hintTxt;
   FE.appendChild(hintEl);
+  if(hit.kind==="text"){
+    const doneBtn=document.createElement("button");
+    doneBtn.textContent="✓ Done";
+    doneBtn.style.cssText="display:block;margin-top:5px;width:100%;padding:7px 0;border-radius:6px;border:0;background:#1f9d55;color:#fff;font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation";
+    doneBtn.onpointerdown=(ev)=>{ ev.preventDefault(); commitEditor(); };
+    FE.appendChild(doneBtn);
+  }
+  if(hit.kind==="dsnote"){
+    // drop the red hint onto its own line so it sits directly above the keypad
+    // instead of beside the input field where it gets in the way
+    hintEl.style.display="block";
+    hintEl.style.margin="6px 0 0";
+    // outer wrapper: numbers on left, A/B/Done column on right.
+    // solid padded panel so gaps between keys are a real surface that absorbs stray taps.
+    const kpWrap=document.createElement("div");
+    kpWrap.style.cssText="display:inline-flex;gap:8px;margin-top:6px;padding:10px;background:#0f1722;border:1px solid #2a3d52;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.4)";
+    // absorb taps that land between/around keys so they don't blur the field / close the keypad
+    kpWrap.addEventListener("pointerdown",(ev)=>{ ev.preventDefault(); });
+
+    // left: 4-row number grid
+    const kpNums=document.createElement("div");
+    kpNums.style.cssText="display:grid;grid-template-columns:repeat(3,1fr);gap:5px";
+    const numKeys=["7","8","9","4","5","6","1","2","3","SPC","0","⌫"];
+    numKeys.forEach(k=>{
+      const btn=document.createElement("button");
+      btn.textContent=k;
+      const isAction=k==="⌫"||k==="SPC";
+      btn.style.cssText="padding:12px 0;border-radius:7px;border:1px solid #3a4d61;"
+        +"background:"+(isAction?"#2a3d52":"#1e2d3d")+";"
+        +"color:#dce6ef;font-size:16px;font-weight:700;cursor:pointer;touch-action:manipulation;min-width:44px";
+      btn.onpointerdown=(ev)=>{
+        ev.preventDefault();
+        if(k==="⌫"){ field.value=field.value.slice(0,-1); }
+        else if(k==="SPC"){ field.value=field.value+" "; }
+        else { field.value=(field.value+k).toUpperCase(); }
+      };
+      kpNums.appendChild(btn);
+    });
+
+    // right: A, B, Done stacked
+    const kpAB=document.createElement("div");
+    kpAB.style.cssText="display:flex;flex-direction:column;gap:5px";
+    [["A","#1e3a52"],["B","#1e3a52"],["✓","#1f9d55"]].forEach(([k,bg])=>{
+      const btn=document.createElement("button");
+      btn.textContent=k;
+      btn.style.cssText="padding:12px 14px;border-radius:7px;border:1px solid #3a4d61;"
+        +"background:"+bg+";color:#dce6ef;font-size:16px;font-weight:700;cursor:pointer;touch-action:manipulation;flex:1";
+      btn.onpointerdown=(ev)=>{
+        ev.preventDefault();
+        if(k==="✓"){ commitEditor(); }
+        else { field.value=(field.value+k).toUpperCase(); }
+      };
+      kpAB.appendChild(btn);
+    });
+
+    kpWrap.appendChild(kpNums);
+    kpWrap.appendChild(kpAB);
+    FE.appendChild(kpWrap);
+  }
   FE.style.display="block";
   // position: clamp inside stage
   const stage=byId("stage");
@@ -2290,7 +2399,8 @@ function openEditorFor(hit){
   if(field.select) field.select();
 
   field.onkeydown=(ev)=>{
-    if(ev.key==="Enter" && !(hit.kind==="text" && ev.shiftKey)){
+    // text tool: Enter inserts a newline (default), close with ✓ Done or Escape
+    if(ev.key==="Enter" && hit.kind!=="text"){
       ev.preventDefault();
       if(hit.kind==="seglen"){
         const objId=editing.objId, nextSeg=editing.seg+1;
@@ -2307,7 +2417,8 @@ function openEditorFor(hit){
       FE.style.display="none"; FE.innerHTML=""; editing=null; draw();
     }
   };
-  field.onblur=()=>{ if(editing) commitEditor(); };
+  // dsnote uses an explicit ✓ Done button, so don't auto-commit when the field loses focus
+  field.onblur=()=>{ if(editing && editing.kind!=="dsnote") commitEditor(); };
 }
 
 function openSeg(objId,segIdx){
