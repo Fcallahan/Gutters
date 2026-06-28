@@ -80,6 +80,16 @@ input,select,textarea{font-family:inherit;font-size:13px}
 }
 .page-tab.active{background:#33455a;color:#fff}
 
+/* options (estimate variants) tab strip */
+#optionsBar{display:flex;align-items:center;gap:6px;flex:0 0 auto;background:#11202e;border-bottom:1px solid #24384c;padding:6px 10px;overflow-x:auto}
+.opt-tab{display:inline-flex;align-items:center;gap:8px;border:1px solid #2c4257;background:#1a2c3d;color:#cfe0ef;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.opt-tab.active{background:var(--prime);border-color:var(--prime-dark);color:#fff}
+.opt-tab .opt-tot{font-weight:600;opacity:.85;font-variant-numeric:tabular-nums}
+.opt-tab .opt-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;background:rgba(255,255,255,.15);font-size:11px;line-height:1}
+.opt-tab .opt-x:hover{background:rgba(255,255,255,.3)}
+.opt-add{border:1px solid #2c4257;background:#16273600;color:#9fc0e0;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.opt-add:hover{background:#1a2c3d}
+
 /* ---------- Body layout ---------- */
 #body{display:flex;flex:1;min-height:0}
 
@@ -250,7 +260,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .rail-scroll::-webkit-scrollbar-thumb{background:#c2cbd4;border-radius:6px;border:2px solid var(--rail);background-clip:content-box}
 
 @media print{
-  #topbar,#dock,#optbar,#statusbar,#hint,#rail .rail-tabs,#photoBar{display:none!important}
+  #topbar,#optionsBar,#dock,#optbar,#statusbar,#hint,#rail .rail-tabs,#photoBar{display:none!important}
 }
 </style>
 </head>
@@ -278,6 +288,8 @@ input,select,textarea{font-family:inherit;font-size:13px}
     <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
     <input type="file" id="photoInput" accept="image/*" multiple style="display:none">
   </div>
+
+  <div id="optionsBar"></div>
 
   <div id="body">
     <!-- LEFT RAIL -->
@@ -466,8 +478,8 @@ function defaultProject(){
   return {
     meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:""},
     settings:{
-      gutterType:"6K",            // 6K = 6" K-style ; 5K = 5" K-style
-      defaultDownspoutSize:"3x4", // for 5K only choice; 6K forced 3x4
+      gutterType:"6K",            // default gutter style id (see GUTTER_STYLES)
+      defaultDownspoutSize:"3x4", // default downspout size id (auto-follows the gutter style)
       gutterBrand:"Spectra",      // Spectra | ABC  — manufacturer color chart for gutters
       gutterColor:"Colonial Gray",
       downspoutBrand:"Spectra",   // Spectra | ABC  — manufacturer color chart for downspouts
@@ -514,9 +526,35 @@ let P = defaultProject();
 let nextId = 1;
 function uid(){ return nextId++; }
 
+/* ---- gutter & downspout style catalogs ----
+   One consolidated gutter tool + one downspout tool; the style/size is chosen from a dropdown.
+   `ds` = downspout sizes allowed for that gutter style; `dsDefault` = the size auto-selected. */
+const GUTTER_STYLES = [
+  {id:"5K",  label:'5" K-style',     short:'5"K',  wide:false, priceKey:"gutter5",   endKey:"endcap5",   ds:["3x4","2x3"],    dsDefault:"3x4"},
+  {id:"6K",  label:'6" K-style',     short:'6"K',  wide:true,  priceKey:"gutter6",   endKey:"endcap6",   ds:["3x4","4round"], dsDefault:"3x4"},
+  {id:"6HR", label:'6" Half-round',  short:'6"HR', wide:true,  priceKey:"gutter6hr", endKey:"endcap6hr", ds:["4round"],       dsDefault:"4round"},
+  {id:"7K",  label:'7" K-style',     short:'7"K',  wide:true,  priceKey:"gutter7",   endKey:"endcap7",   ds:["3x4","4x5"],    dsDefault:"3x4"},
+];
+const DS_STYLES = [
+  {id:"2x3",    label:'2"×3"',      short:'2×3',      priceKey:"ds2x3",    outletKey:"outlet2x3",    elbowKey:"elbow2x3",    offsetKey:"offset2x3"},
+  {id:"3x4",    label:'3"×4"',      short:'3×4',      priceKey:"ds3x4",    outletKey:"outlet3x4",    elbowKey:"elbow3x4",    offsetKey:"offset3x4"},
+  {id:"4round", label:'4" Round',   short:'4″ Round', priceKey:"ds4round", outletKey:"outlet4round", elbowKey:"elbow4round", offsetKey:"offset4round"},
+  {id:"4x5",    label:'4"×5"',      short:'4×5',      priceKey:"ds4x5",    outletKey:"outlet4x5",    elbowKey:"elbow4x5",    offsetKey:"offset4x5"},
+];
+function gutterStyle(id){ return GUTTER_STYLES.find(g=>g.id===id) || GUTTER_STYLES[1]; } // default 6K
+function dsStyle(id){ return DS_STYLES.find(d=>d.id===id) || DS_STYLES[1]; }            // default 3x4
+
 /* default itemized prices */
-const PRICE_KEYS = ["gutter6","gutter5","ds3x4","ds2x3","diverters","outlet3x4","outlet2x3",
- "valley","splash","leaf6","leaf5","strip","box","bay","elbow3x4","elbow2x3","offset3x4","offset2x3","endcap6","endcap5"];
+const PRICE_KEYS = [
+  ...GUTTER_STYLES.map(g=>g.priceKey),
+  ...DS_STYLES.map(d=>d.priceKey),
+  "diverters",
+  ...DS_STYLES.map(d=>d.outletKey),
+  "valley","splash","leaf6","leaf5","strip","box","bay",
+  ...DS_STYLES.map(d=>d.elbowKey),
+  ...DS_STYLES.map(d=>d.offsetKey),
+  ...GUTTER_STYLES.map(g=>g.endKey),
+];
 function ensurePrices(){
   P.settings.prices = P.settings.prices || {};
   PRICE_KEYS.forEach(k=>{ if(P.settings.prices[k]==null) P.settings.prices[k]=0; });
@@ -713,8 +751,8 @@ function parseDS(str){
   return {a,b,o2,o4,o6,feet,elbows:a+b,offsets:o2+o4+o6,outlets:1};
 }
 
-/* downspout size allowed for current gutter type */
-function allowedDsSizes(){ return ["3x4","2x3"]; }
+/* downspout sizes allowed for a gutter style (defaults to the job gutter style) */
+function allowedDsSizes(type){ return gutterStyle(type||P.settings.gutterType).ds; }
 function dsSizeFor(o){
   return o.size || P.settings.defaultDownspoutSize;
 }
@@ -792,11 +830,11 @@ function runCorners(run){
 function compute(){
   ensurePrices();
   const s=P.settings;
-  const q={gutter6:0,gutter5:0,ds3x4:0,ds2x3:0,
-    diverters:+s.diverters||0, outlet3x4:0,outlet2x3:0, valley:0,
+  const q={diverters:+s.diverters||0, valley:0,
     splash:+s.splashBlocks||0, leaf6:+s.leafGuard6||0, leaf5:+s.leafGuard5||0,
-    strip:0,box:0,bay:0, elbow3x4:0,elbow2x3:0, offset3x4:0,offset2x3:0,
-    endcap6:0,endcap5:0};
+    strip:0,box:0,bay:0};
+  GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; });
+  DS_STYLES.forEach(d=>{ q[d.priceKey]=0; q[d.outletKey]=0; q[d.elbowKey]=0; q[d.offsetKey]=0; });
   let corners=0;
   const customAgg={};
   const dsRaw={};   // downspout pipe footage by size|color, before 10ft rounding
@@ -806,8 +844,8 @@ function compute(){
   for(const o of P.objects){
     if(o.t==="gutter"){
       const ft=(o.lengths||[]).reduce((a,b)=>a+(+b||0),0);
-      const g6 = gutterSizeFor(o)==="6K";
-      if(g6) q.gutter6+=ft; else q.gutter5+=ft;
+      const gs=gutterStyle(gutterSizeFor(o));
+      q[gs.priceKey]+=ft;
       // corners
       const cs=runCorners(o);
       for(const c of cs){
@@ -820,14 +858,13 @@ function compute(){
       const cm=o.caps||[true,true];
       let caps=0;
       for(let i=0;i<2;i++){ if(fe[i] && cm[i]!==false) caps++; }
-      if(g6) q.endcap6+=caps; else q.endcap5+=caps;
+      q[gs.endKey]+=caps;
     } else if(o.t==="ds"){
       const d=parseDS(o.notation);
-      const sz=dsSizeFor(o);
+      const ds=dsStyle(dsSizeFor(o));
       const colorName=o.color||s.downspoutColor;
-      dsRaw[sz+"|"+colorName]=(dsRaw[sz+"|"+colorName]||0)+d.feet;  // raw pipe, rounded after loop
-      if(sz==="3x4"){ q.elbow3x4+=d.elbows; q.offset3x4+=d.offsets; q.outlet3x4+=d.outlets; }
-      else { q.elbow2x3+=d.elbows; q.offset2x3+=d.offsets; q.outlet2x3+=d.outlets; }
+      dsRaw[ds.id+"|"+colorName]=(dsRaw[ds.id+"|"+colorName]||0)+d.feet;  // raw pipe, rounded after loop
+      q[ds.elbowKey]+=d.elbows; q[ds.offsetKey]+=d.offsets; q[ds.outletKey]+=d.outlets;
     } else if(o.t==="valley"){
       q.valley++;
     } else if(o.t==="custom"){
@@ -861,41 +898,34 @@ function compute(){
 
   // round each downspout pipe group (size+color) up to 10ft sections, then total by size
   for(const k in dsRaw){
-    const sz=k.split("|")[0];
-    const ft=dsRound(dsRaw[k]);
-    if(sz==="3x4") q.ds3x4+=ft; else q.ds2x3+=ft;
+    const szid=k.split("|")[0];
+    q[dsStyle(szid).priceKey]+=dsRound(dsRaw[k]);
   }
 
-  const outlets=q.outlet3x4+q.outlet2x3;
-  const elbowsTot=q.elbow3x4+q.elbow2x3;
-  const offsetsTot=q.offset3x4+q.offset2x3;
-  const endcapsTot=q.endcap6+q.endcap5;
+  const outlets=DS_STYLES.reduce((a,d)=>a+q[d.outletKey],0);
+  const elbowsTot=DS_STYLES.reduce((a,d)=>a+q[d.elbowKey],0);
+  const offsetsTot=DS_STYLES.reduce((a,d)=>a+q[d.offsetKey],0);
+  const endcapsTot=GUTTER_STYLES.reduce((a,g)=>a+q[g.endKey],0);
+  const gutterLin=GUTTER_STYLES.reduce((a,g)=>a+q[g.priceKey],0);
+  const dsLin=DS_STYLES.reduce((a,d)=>a+q[d.priceKey],0);
   // total gutter linear footage (drives flat per-foot pricing). End caps add here (gutter component).
   // Always rounded UP to the nearest whole foot.
   const gutterFootage = Math.ceil(
-    q.gutter6+q.gutter5
+    gutterLin
     + corners*(+s.footagePerCorner||0)
     + outlets*(+s.footagePerOutlet||0)
     + q.valley*(+s.footagePerValley||0)
     + endcapsTot*(+s.footagePerEndcap||0)
   );
   // downspout footage. Elbows + offsets add here (downspout components).
-  const dsFootage = q.ds3x4+q.ds2x3
+  const dsFootage = dsLin
     + elbowsTot*(+s.footagePerElbow||0)
     + offsetsTot*(+s.footagePerOffset||0);
 
-  // amounts (itemized)
+  // amounts (itemized) — one line per priced component
   const pr=s.prices;
-  const amt={
-    gutter6:q.gutter6*pr.gutter6, gutter5:q.gutter5*pr.gutter5,
-    ds3x4:q.ds3x4*pr.ds3x4, ds2x3:q.ds2x3*pr.ds2x3,
-    diverters:q.diverters*pr.diverters, outlet3x4:q.outlet3x4*pr.outlet3x4, outlet2x3:q.outlet2x3*pr.outlet2x3,
-    valley:q.valley*pr.valley, splash:q.splash*pr.splash, leaf6:q.leaf6*pr.leaf6, leaf5:q.leaf5*pr.leaf5,
-    strip:q.strip*pr.strip, box:q.box*pr.box, bay:q.bay*pr.bay,
-    elbow3x4:q.elbow3x4*pr.elbow3x4, elbow2x3:q.elbow2x3*pr.elbow2x3,
-    offset3x4:q.offset3x4*pr.offset3x4, offset2x3:q.offset2x3*pr.offset2x3,
-    endcap6:q.endcap6*pr.endcap6, endcap5:q.endcap5*pr.endcap5
-  };
+  const amt={};
+  for(const k of PRICE_KEYS){ amt[k]=(q[k]||0)*(+pr[k]||0); }
   const itemizedSub = Object.values(amt).reduce((a,b)=>a+b,0);
 
   const leafAmount = q.leaf6*pr.leaf6 + q.leaf5*pr.leaf5;
@@ -944,7 +974,7 @@ function materialList(){
   const add=(map,key,base)=>{ if(!map[key]) map[key]=Object.assign({qty:0},base); return map[key]; };
   for(const o of P.objects){
     if(o.t==="gutter"){
-      const size=gutterSizeFor(o)==="6K"?'6" K-style':'5" K-style';
+      const size=gutterStyle(gutterSizeFor(o)).label;
       const colorName=o.color||s.gutterColor;
       const brand=effBrand(o);                          // per-object brand (falls back to job)
       const k=brand+"|"+colorName;
@@ -955,11 +985,11 @@ function materialList(){
         add(gutParts,part+"|"+k,{item:part,unit:"ea",color:colorName,brand}).qty+=1;
       }
       const fe=freeEnds(o); const cm=o.caps||[true,true];
-      const cs=gutterSizeFor(o)==="6K"?'6"':'5"';
+      const cs=gutterStyle(gutterSizeFor(o)).short;
       let caps=0; for(let i=0;i<2;i++) if(fe[i]&&cm[i]!==false) caps++;
       if(caps) add(gutParts,'End cap '+cs+"|"+k,{item:'End cap '+cs,unit:"ea",color:colorName,brand}).qty+=caps;
     } else if(o.t==="ds"){
-      const szl=dsSizeFor(o)==="3x4"?'3×4':'2×3';
+      const szl=dsStyle(dsSizeFor(o)).short;
       const colorName=o.color||s.downspoutColor;
       const brand=effBrand(o);                          // per-object brand (falls back to job)
       const k=brand+"|"+colorName;
@@ -1183,7 +1213,7 @@ function drawGutter(o){
   const pts=o.pts.map(worldToScreen);
   const isSel=sel.has(o.id);
   const col=colorHex(o.color||P.settings.gutterColor,effBrand(o));
-  const w6 = gutterSizeFor(o)==="6K";
+  const w6 = gutterStyle(gutterSizeFor(o)).wide;
   // casing
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="round";
@@ -1598,10 +1628,8 @@ const BASE_TOOLS=[
   {id:"select",behavior:"select",icon:"select",name:"Select & move",key:"V"},
   {id:"hand",behavior:"hand",icon:"hand",name:"Pan (or hold Space)",key:"H"},
   {id:"_div"},
-  {id:"gutter6",behavior:"gutter",icon:"gutter",size:"6K",name:'6" K-style gutter',key:"6",lbl:'6"K'},
-  {id:"gutter5",behavior:"gutter",icon:"gutter",size:"5K",name:'5" K-style gutter',key:"5",lbl:'5"K'},
-  {id:"ds3x4",behavior:"ds",icon:"ds",size:"3x4",name:'3×4 downspout',key:"3",lbl:"3×4"},
-  {id:"ds2x3",behavior:"ds",icon:"ds",size:"2x3",name:'2×3 downspout',key:"2",lbl:"2×3"},
+  {id:"gutter",behavior:"gutter",icon:"gutter",name:'Gutter — pick style above',key:"G",lbl:'GUT'},
+  {id:"ds",behavior:"ds",icon:"ds",name:'Downspout — pick size above',key:"D",lbl:'DS'},
   {id:"valley",behavior:"valley",icon:"valley",name:"Valley shield (VS)",key:"S"},
   {id:"demo",behavior:"demo",icon:"demo",name:"Demo gutter — drag to mark for removal",key:"X",lbl:"DEMO"},
   {id:"screen",behavior:"screen",icon:"screen",name:"Gutter screen — drag over runs",key:"N",lbl:"SCRN"},
@@ -1627,7 +1655,7 @@ function allTools(){
 }
 function toolDefById(id){ return allTools().find(t=>t.id===id); }
 
-let activeToolId="gutter6";   // which dock button is highlighted
+let activeToolId="gutter";   // which dock button is highlighted
 let activeCustom=null;        // active custom product id (when behavior==="custom")
 
 function buildDock(){
@@ -1687,7 +1715,8 @@ function buildOptbar(){
   let h="";
   if(tool==="gutter"){
     const gsz=(gutterDrawSize||P.settings.gutterType);
-    h+='<span class="ob-title">'+(gsz==="6K"?'6" K-STYLE':'5" K-STYLE')+'</span>'+dv
+    h+='<span class="ob-title">GUTTER</span>'+dv
+      + g('<label>Style</label><select id="opGutStyle">'+GUTTER_STYLES.map(st=>'<option value="'+st.id+'"'+(st.id===gsz?' selected':'')+'>'+st.label+'</option>').join("")+'</select>')+dv
       + g('<label>Brand</label><select id="opGutBrand">'+BRANDS.map(b=>'<option value="'+b+'"'+(b===gutterBrand()?' selected':'')+'>'+b+'</option>').join("")+'</select>')
       + g('<label>Color</label><span class="swatch" id="opGutSw" style="background:'+colorHex(gutterDrawColor||P.settings.gutterColor,gutterBrand())+'"></span><select id="opGutColor">'+colorOptions(gutterDrawColor||P.settings.gutterColor,gutterBrand())+'</select>')
       + dv + g('<label><input type="checkbox" id="opAuto" '+(P.settings.autoMeasure?"checked":"")+'> Auto-measure</label>')
@@ -1696,8 +1725,11 @@ function buildOptbar(){
       + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap to grid</label>')
       + g('<label><input type="checkbox" id="opAngleSnap" '+(angleSnap?"checked":"")+'> 22.5° angles</label>');
   } else if(tool==="ds"){
+    const allowed=allowedDsSizes(gutterDrawSize||P.settings.gutterType);
+    if(!allowed.includes(dsDrawSize||P.settings.defaultDownspoutSize)) dsDrawSize=allowed[0];
     const dsz=(dsDrawSize||P.settings.defaultDownspoutSize);
-    h+='<span class="ob-title">'+dsz.replace("x","×")+' DOWNSPOUT</span>'+dv
+    h+='<span class="ob-title">DOWNSPOUT</span>'+dv
+      + g('<label>Size</label><select id="opDsSize"'+(allowed.length<2?' disabled':'')+'>'+allowed.map(id=>'<option value="'+id+'"'+(id===dsz?' selected':'')+'>'+dsStyle(id).short+'</option>').join("")+'</select>')+dv
       + g('<label>Brand</label><select id="opDsBrand">'+BRANDS.map(b=>'<option value="'+b+'"'+(b===downspoutBrand()?' selected':'')+'>'+b+'</option>').join("")+'</select>')
       + g('<label>Color</label><span class="swatch" id="opDsSw" style="background:'+colorHex(dsDrawColor||P.settings.downspoutColor,downspoutBrand())+'"></span><select id="opDsColor">'+colorOptions(dsDrawColor||P.settings.downspoutColor,downspoutBrand())+'</select>')
       + '<span class="mini" style="color:var(--text-soft)">Each spout can be recolored later via Select</span>'
@@ -1754,12 +1786,12 @@ function buildOptbar(){
     if(one && one.t==="ds"){
       const oBrand=effBrand(one);                       // this spout's effective brand
       const cur=one.color||P.settings.downspoutColor;
-      const szs=(P.settings.gutterType==="6K")?["3x4"]:["3x4","2x3"];
+      let szs=allowedDsSizes().slice(); const curSz=dsSizeFor(one); if(!szs.includes(curSz)) szs=[curSz,...szs];
       const dsColorOpts=(one.brand?"":'<option value="">Match job ('+P.settings.downspoutColor+')</option>')
         +brandColorList(oBrand).map(c=>'<option value="'+c.n+'"'+(one.color===c.n?' selected':'')+'>'+c.n+'</option>').join("");
       h+= g('<label>Brand</label><select id="opSelDsBrand"><option value="">Match job ('+downspoutBrand()+')</option>'+BRANDS.map(b=>'<option value="'+b+'"'+(one.brand===b?' selected':'')+'>'+b+'</option>').join("")+'</select>')
         + g('<label>Spout color</label><span class="swatch" id="opSelSw" style="background:'+colorHex(cur,oBrand)+'"></span><select id="opSelDsColor">'+dsColorOpts+'</select>')
-        + g('<label>Size</label><select id="opSelDsSize"'+(szs.length<2?' disabled':'')+'>'+szs.map(s=>'<option value="'+s+'"'+(dsSizeFor(one)===s?' selected':'')+'>'+s+'</option>').join("")+'</select>')
+        + g('<label>Size</label><select id="opSelDsSize"'+(szs.length<2?' disabled':'')+'>'+szs.map(s=>'<option value="'+s+'"'+(curSz===s?' selected':'')+'>'+dsStyle(s).short+'</option>').join("")+'</select>')
         + '<span class="mini" style="color:var(--text-soft)">Override for brick vs. stucco, etc.</span>' + dv;
     } else if(one && one.t==="gutter"){
       const fe=freeEnds(one); const cm=one.caps||[true,true];
@@ -1770,7 +1802,7 @@ function buildOptbar(){
         +brandColorList(oBrand).map(c=>'<option value="'+c.n+'"'+(one.color===c.n?' selected':'')+'>'+c.n+'</option>').join("");
       h+= g('<label>Brand</label><select id="opSelGutBrand"><option value="">Match job ('+gutterBrand()+')</option>'+BRANDS.map(b=>'<option value="'+b+'"'+(one.brand===b?' selected':'')+'>'+b+'</option>').join("")+'</select>')
         + g('<label>Gutter color</label><span class="swatch" id="opSelSw" style="background:'+colorHex(one.color||P.settings.gutterColor,oBrand)+'"></span><select id="opSelGutColor">'+gutColorOpts+'</select>')
-        + g('<label>System</label><select id="opSelGutSize"><option value="">Job default</option><option value="6K"'+(one.size==="6K"?' selected':'')+'>6" K</option><option value="5K"'+(one.size==="5K"?' selected':'')+'>5" K</option></select>')
+        + g('<label>Style</label><select id="opSelGutSize"><option value="">Job default</option>'+GUTTER_STYLES.map(st=>'<option value="'+st.id+'"'+(one.size===st.id?' selected':'')+'>'+st.short+'</option>').join("")+'</select>')
         + g('<label>'+capChk(0)+' '+capLbl(0,'Start cap')+'</label>')
         + g('<label>'+capChk(1)+' '+capLbl(1,'End cap')+'</label>') + dv;
     } else if(one && one.t==="stamp"){
@@ -1793,7 +1825,13 @@ function buildOptbar(){
 }
 function wireOptbar(){
   const byId=id=>document.getElementById(id);
-  if(byId("opGutSize")) byId("opGutSize").onchange=e=>{ gutterDrawSize=e.target.value||null; };
+  if(byId("opGutStyle")) byId("opGutStyle").onchange=e=>{
+    gutterDrawSize=e.target.value;
+    const st=gutterStyle(gutterDrawSize);
+    P.settings.defaultDownspoutSize=st.dsDefault;          // downspout default follows the gutter style
+    if(!st.ds.includes(dsDrawSize)) dsDrawSize=null;        // drop a now-disallowed draw size
+    buildOptbar(); refreshAll();
+  };
   if(byId("opGutBrand")) byId("opGutBrand").onchange=e=>{
     P.settings.gutterBrand=e.target.value;
     const list=brandColorList(e.target.value);
@@ -1925,6 +1963,93 @@ function restore(s){
 }
 function undo(){ if(hidx>0){hidx--;restore(history[hidx]);} }
 function redo(){ if(hidx<history.length-1){hidx++;restore(history[hidx]);} }
+
+/* ============================================================ */
+/* OPTIONS — multiple estimate variants in one job (tabs)       */
+/* ============================================================ */
+// Each option owns its drawing (objects), pricing (settings) and undo history.
+// meta (customer), photos, stamp presets and the id counter are SHARED across options.
+let OPTIONS=[];     // [{id,name,settings,objects,history,hidx}]
+let activeOpt=0;
+let optSeq=1;
+
+function captureActive(){
+  const o=OPTIONS[activeOpt]; if(!o) return;
+  o.settings=P.settings; o.objects=P.objects; o.history=history; o.hidx=hidx;
+}
+// point the live state at option i's data + history, then rebuild the UI
+function activate(i){
+  const o=OPTIONS[i]; if(!o) return;
+  activeOpt=i;
+  P.settings=o.settings; P.objects=o.objects;
+  history=o.history||[]; hidx=(o.hidx==null?history.length-1:o.hidx);
+  sel.clear(); if(typeof segSel!=="undefined"&&segSel) segSel.clear();
+  ensurePrices();
+  byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
+  buildDock(); buildOptbar(); buildOptionsBar(); updateUndoButtons(); refreshAll();
+}
+function switchOption(i){ if(i===activeOpt||!OPTIONS[i]) return; captureActive(); activate(i); }
+function seedHistory(){ history=[snapshot()]; hidx=0; updateUndoButtons(); }
+
+function addOption(mode){   // mode: "dup" (copy active drawing+pricing) | "blank" (carry pricing, empty drawing)
+  captureActive();
+  const src=OPTIONS[activeOpt];
+  const settings=JSON.parse(JSON.stringify(src?src.settings:P.settings));
+  const objects= mode==="dup" ? JSON.parse(JSON.stringify(src?src.objects:P.objects)) : [];
+  const opt={id:optSeq++, name:"Option "+(OPTIONS.length+1), settings, objects, history:[], hidx:-1};
+  OPTIONS.push(opt);
+  activeOpt=OPTIONS.length-1;
+  P.settings=opt.settings; P.objects=opt.objects;
+  sel.clear(); if(typeof segSel!=="undefined"&&segSel) segSel.clear();
+  ensurePrices();
+  byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
+  seedHistory();
+  buildDock(); buildOptbar(); buildOptionsBar(); centerView(); refreshAll(); saveLocal();
+}
+function deleteOption(i){
+  if(OPTIONS.length<=1||!OPTIONS[i]) return;
+  if(!confirm("Delete "+OPTIONS[i].name+"?")) return;
+  OPTIONS.splice(i,1);
+  if(activeOpt>=OPTIONS.length) activeOpt=OPTIONS.length-1;
+  else if(i<activeOpt) activeOpt--;
+  activate(activeOpt); saveLocal();
+}
+function renameOption(i){
+  const o=OPTIONS[i]; if(!o) return;
+  const n=prompt("Option name:", o.name);
+  if(n!=null && n.trim()){ o.name=n.trim(); buildOptionsBar(); saveLocal(); }
+}
+// turnkey total of an arbitrary option (used for the tab labels) without disturbing the live state
+function optionTotal(opt){
+  const sS=P.settings, sO=P.objects;
+  P.settings=opt.settings; P.objects=opt.objects;
+  let g=0; try{ g=compute().grand; }catch(e){}
+  P.settings=sS; P.objects=sO;
+  return g;
+}
+// wrap whatever is currently in P into a single "Option 1" (startup / new / legacy load)
+function initSingleOption(){
+  OPTIONS=[{id:optSeq++, name:"Option 1", settings:P.settings, objects:P.objects, history:history, hidx:hidx}];
+  activeOpt=0;
+}
+function buildOptionsBar(){
+  const bar=byId("optionsBar"); if(!bar) return;
+  let h="";
+  OPTIONS.forEach((o,i)=>{
+    const x = OPTIONS.length>1 ? `<span class="opt-x" data-del="${i}" title="Delete option">✕</span>` : "";
+    h+=`<button class="opt-tab ${i===activeOpt?"active":""}" data-opt="${i}"><span>${esc(o.name)}</span><span class="opt-tot">${money(optionTotal(o))}</span>${x}</button>`;
+  });
+  h+=`<button class="opt-add" id="optDup" title="Copy this option's drawing & pricing into a new tab">⧉ Duplicate</button>`;
+  h+=`<button class="opt-add" id="optBlank" title="New option — same pricing, empty drawing">＋ Blank</button>`;
+  bar.innerHTML=h;
+  bar.querySelectorAll(".opt-tab").forEach(btn=>{
+    btn.onclick=(e)=>{ if(e.target.closest(".opt-x")) return; switchOption(+btn.dataset.opt); };
+    btn.ondblclick=()=>renameOption(+btn.dataset.opt);
+  });
+  bar.querySelectorAll(".opt-x").forEach(x=>{ x.onclick=(e)=>{ e.stopPropagation(); deleteOption(+x.dataset.del); }; });
+  const dup=byId("optDup"); if(dup) dup.onclick=()=>addOption("dup");
+  const bl=byId("optBlank"); if(bl) bl.onclick=()=>addOption("blank");
+}
 
 /* ============================================================ */
 /* HIT TESTING                                                  */
@@ -2434,7 +2559,7 @@ function finishCustom(){
 
 function startCalibration(){
   cancelDrawing();
-  setTool("gutter6");
+  setTool("gutter");
   calib={a:null,b:null};
   setHint("CALIBRATE: click one end of a wall you know the real length of.");
   draw();
@@ -2495,6 +2620,15 @@ function selectInMarquee(m){
     if((o.t==="gutter"||(o.t==="custom"&&!o.stroke))&&o.pts){
       const ps=o.pts.map(worldToScreen);
       for(let i=0;i<ps.length-1;i++){ if(segIntersectsRect(ps[i],ps[i+1],r)) segSel.add(segKey(o.id,i)); }
+    } else if((o.t==="hl"||o.t==="demo"||o.t==="screen"||(o.t==="custom"&&o.stroke))&&o.pts){
+      // highlight strokes select only when the marquee actually touches the painted PATH,
+      // not its bounding box — so you can box items inside a closed/wide highlight without
+      // grabbing the highlight itself.
+      const ps=o.pts.map(worldToScreen);
+      let hit=false;
+      if(ps.length===1){ const p=ps[0]; hit = p.x>=r.x0&&p.x<=r.x1&&p.y>=r.y0&&p.y<=r.y1; }
+      else { for(let i=0;i<ps.length-1;i++){ if(segIntersectsRect(ps[i],ps[i+1],r)){ hit=true; break; } } }
+      if(hit) sel.add(o.id);
     } else {
       const b=objBounds(o);
       const tl=worldToScreen({x:b.x,y:b.y}), br=worldToScreen({x:b.x+b.w,y:b.y+b.h});
@@ -2734,13 +2868,10 @@ function openSeg(objId,segIdx){
 // worksheet line definitions (form order). kind: ft = linear feet, ea = count.
 // src: 'auto' (from drawing), or a settings key for manual entry.
 const LINES = [
-  {key:"gutter6",  label:'GUTTER 6"',        kind:"ft", src:"auto"},
-  {key:"gutter5",  label:'GUTTER 5"',        kind:"ft", src:"auto"},
-  {key:"ds3x4",    label:'DOWNSPOUT 3"×4"',  kind:"ft", src:"auto"},
-  {key:"ds2x3",    label:'DOWNSPOUT 2"×3"',  kind:"ft", src:"auto"},
+  ...GUTTER_STYLES.map(g=>({key:g.priceKey, label:'GUTTER '+g.short,        kind:"ft", src:"auto"})),
+  ...DS_STYLES.map(d=>({key:d.priceKey,     label:'DOWNSPOUT '+d.short,     kind:"ft", src:"auto"})),
   {key:"diverters",label:"DIVERTERS",        kind:"ea", src:"diverters"},
-  {key:"outlet3x4",label:'OUTLETS 3"×4"',    kind:"ea", src:"auto"},
-  {key:"outlet2x3",label:'OUTLETS 2"×3"',    kind:"ea", src:"auto"},
+  ...DS_STYLES.map(d=>({key:d.outletKey,    label:'OUTLETS '+d.short,       kind:"ea", src:"auto"})),
   {key:"valley",   label:"VALLEY SHIELD",    kind:"ea", src:"auto", tag:"VS"},
   {key:"splash",   label:"SPLASH BLOCKS",    kind:"ea", src:"splashBlocks"},
   {key:"leaf6",    label:'LEAF GUARD 6"',    kind:"ft", src:"leafGuard6"},
@@ -2748,12 +2879,9 @@ const LINES = [
   {key:"strip",    label:"STRIP MITER",      kind:"ea", src:"auto"},
   {key:"box",      label:"BOX MITER",        kind:"ea", src:"auto"},
   {key:"bay",      label:"BAY MITER",        kind:"ea", src:"auto"},
-  {key:"elbow3x4", label:'ELBOWS 3"×4"',     kind:"ea", src:"auto"},
-  {key:"elbow2x3", label:'ELBOWS 2"×3"',     kind:"ea", src:"auto"},
-  {key:"offset3x4",label:'OFFSET 3"×4"',     kind:"ea", src:"auto"},
-  {key:"offset2x3",label:'OFFSET 2"×3"',     kind:"ea", src:"auto"},
-  {key:"endcap6",  label:'END CAPS 6"',      kind:"ea", src:"auto"},
-  {key:"endcap5",  label:'END CAPS 5"',      kind:"ea", src:"auto"},
+  ...DS_STYLES.map(d=>({key:d.elbowKey,     label:'ELBOWS '+d.short,        kind:"ea", src:"auto"})),
+  ...DS_STYLES.map(d=>({key:d.offsetKey,    label:'OFFSET '+d.short,        kind:"ea", src:"auto"})),
+  ...GUTTER_STYLES.map(g=>({key:g.endKey,   label:'END CAPS '+g.short,      kind:"ea", src:"auto"})),
 ];
 const SETTING_OF = {diverters:"diverters",splashBlocks:"splashBlocks",leafGuard6:"leafGuard6",leafGuard5:"leafGuard5"};
 
@@ -2879,6 +3007,21 @@ function buildPricingPane(){
   h+=`<div class="sec-h">Pricing mode</div>`;
   h+=`<div class="seg-toggle"><button data-mode="flat" class="${flat?"on":""}">Flat $/ft</button><button data-mode="itemized" class="${flat?"":"on"}">Itemized</button></div>`;
 
+  // Per-style $/ft — always editable, independent of pricing mode
+  h+=`<div class="sec-h">Gutter style pricing <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ / ft</span></div>`;
+  h+=`<div class="worksheet"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Style</div><div>$ / ft</div></div>`;
+  for(const gst of GUTTER_STYLES){
+    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${gst.label}</div><input class="ws-price" data-price="${gst.priceKey}" value="${s.prices[gst.priceKey]||0}" inputmode="decimal"></div>`;
+  }
+  h+=`</div>`;
+  h+=`<div class="sec-h">Downspout style pricing <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ / ft</span></div>`;
+  h+=`<div class="worksheet"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Size</div><div>$ / ft</div></div>`;
+  for(const dst of DS_STYLES){
+    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${dst.label}</div><input class="ws-price" data-price="${dst.priceKey}" value="${s.prices[dst.priceKey]||0}" inputmode="decimal"></div>`;
+  }
+  h+=`</div>`;
+  h+=`<div class="note">These per-style rates drive the itemized estimate. In flat $/ft mode the single rates below are used instead.</div>`;
+
   if(flat){
     h+=`<div class="sec-h">Flat rates</div>`;
     h+=`<div class="row2">${fld("Gutter $/ft","pcGutRate",s.flatGutterRate,"number",'step="0.25" inputmode="decimal"')}${fld("Downspout $/ft","pcDsRate",s.flatDownspoutRate,"number",'step="0.25" inputmode="decimal"')}</div>`;
@@ -2913,8 +3056,9 @@ function buildPricingPane(){
   h+=`<div class="note">Downspout pipe is sold in 10 ft sections, so each downspout color/size is rounded up to the next 10 ft (e.g. 35 ft → 40 ft).</div>`;
 
   h+=`<div class="sec-h">Drawing defaults</div>`;
-  h+=`<div class="fld"><label>Gutter system</label><div class="seg-toggle"><button data-gt="6K" class="${s.gutterType==="6K"?"on":""}">6" K-style</button><button data-gt="5K" class="${s.gutterType==="5K"?"on":""}">5" K-style</button></div></div>`;
-  h+=`<div class="fld"><label>Default downspout size</label><select id="pcDsDef"><option value="3x4" ${s.defaultDownspoutSize==="3x4"?"selected":""}>3" × 4"</option><option value="2x3" ${s.defaultDownspoutSize==="2x3"?"selected":""}>2" × 3"</option></select></div>`;
+  h+=`<div class="fld"><label>Gutter system</label><select id="pcGutSys">${GUTTER_STYLES.map(g=>`<option value="${g.id}" ${s.gutterType===g.id?"selected":""}>${g.label}</option>`).join("")}</select></div>`;
+  const dsAllowed=allowedDsSizes(s.gutterType);
+  h+=`<div class="fld"><label>Default downspout size</label><select id="pcDsDef">${dsAllowed.map(id=>`<option value="${id}" ${s.defaultDownspoutSize===id?"selected":""}>${dsStyle(id).label}</option>`).join("")}</select></div>`;
   h+=`<div class="fld"><label>Type footage → resize line to scale</label><div class="seg-toggle"><button data-roe="1" class="${s.resizeOnEdit!==false?"on":""}">On</button><button data-roe="0" class="${s.resizeOnEdit===false?"on":""}">Off</button></div></div>`;
   h+=`<div class="note">When on, typing a segment's footage redraws that segment to scale (using your ft-per-square / calibration) and drags the rest of the run along, keeping corners connected.</div>`;
   h+=`<div class="fld"><label>Measurement label size <span style="color:var(--text-soft);font-weight:600">${Math.round((s.labelSize||1)*100)}%</span></label><input type="range" id="pcLabelSize" min="0.4" max="3" step="0.1" value="${s.labelSize||1}" style="width:100%"></div>`;
@@ -2936,9 +3080,9 @@ function wirePricing(){
   byId("panePricing").querySelectorAll(".seg-toggle [data-r10]").forEach(b=>b.onclick=()=>{ s.roundDownspoutTo10=(b.dataset.r10==="1"); refreshAll(); });
   byId("panePricing").querySelectorAll(".seg-toggle [data-roe]").forEach(b=>b.onclick=()=>{ s.resizeOnEdit=(b.dataset.roe==="1"); refreshAll(); });
   { const ls=byId("pcLabelSize"); if(ls) ls.oninput=()=>{ s.labelSize=+ls.value; draw(); const lab=ls.parentElement.querySelector("span"); if(lab) lab.textContent=Math.round(s.labelSize*100)+"%"; }; }
-  byId("panePricing").querySelectorAll(".seg-toggle [data-gt]").forEach(b=>b.onclick=()=>{
-    s.gutterType=b.dataset.gt; if(s.gutterType==="6K") s.defaultDownspoutSize="3x4"; refreshAll();
-  });
+  { const gsy=byId("pcGutSys"); if(gsy) gsy.onchange=()=>{
+    s.gutterType=gsy.value; s.defaultDownspoutSize=gutterStyle(s.gutterType).dsDefault; buildPricingPane(); refreshAll();
+  }; }
   const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; refreshAll(); }; };
   num("pcGutRate","flatGutterRate");num("pcDsRate","flatDownspoutRate");
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
@@ -2984,6 +3128,7 @@ function refreshAll(){
   if(byId("paneJob").innerHTML==="") buildJobPane();
   if(byId("panePricing").innerHTML==="") buildPricingPane();
   else buildPricingPane();
+  if(OPTIONS.length) buildOptionsBar();   // keep tab labels / live totals current
 }
 
 /* ============================================================ */
@@ -3022,7 +3167,7 @@ function openCustomProduct(editId){
       recordHistory();
       P.settings.customProducts=list.filter(p=>p.id!==id);
       P.objects=P.objects.filter(o=>!(o.t==="custom"&&o.productId===id));
-      if(activeCustom===id){ activeCustom=null; setTool("gutter6"); }
+      if(activeCustom===id){ activeCustom=null; setTool("gutter"); }
       buildDock(); refreshAll(); openCustomProduct();
     }
   });
@@ -3083,7 +3228,7 @@ function openSettings(){
   const s=P.settings;
   let h="";
   h+=`<div class="sec-h">Gutter system</div>`;
-  h+=`<div class="seg-toggle"><button data-gt="6K" class="${s.gutterType==="6K"?"on":""}">6" K-style → 3×4 spouts</button><button data-gt="5K" class="${s.gutterType==="5K"?"on":""}">5" K-style</button></div>`;
+  h+=`<div class="fld"><label>Default style → downspout</label><select id="stGutSys">${GUTTER_STYLES.map(g=>`<option value="${g.id}" ${s.gutterType===g.id?"selected":""}>${g.label} → ${dsStyle(g.dsDefault).short}</option>`).join("")}</select></div>`;
   h+=`<div class="sec-h">Miters</div>`;
   h+=`<div class="fld"><label>Regular (≈90°) miter</label><div class="seg-toggle"><button data-mit="box" class="${s.regularMiter==="box"?"on":""}">Box</button><button data-mit="strip" class="${s.regularMiter==="strip"?"on":""}">Strip</button></div></div>`;
   h+=`<div class="fld">${fld("Bay miter ±° from 90","stBay",s.bayDeviation,"number")}</div>`;
@@ -3096,7 +3241,7 @@ function openSettings(){
   h+=`<div class="note">These defaults drive automatic takeoff and pricing. They mirror the controls in the Pricing tab.</div>`;
   openModal("Job defaults & rules",h);
   const b=byId("modalBody");
-  b.querySelectorAll("[data-gt]").forEach(x=>x.onclick=()=>{ s.gutterType=x.dataset.gt; if(s.gutterType==="6K")s.defaultDownspoutSize="3x4"; openSettings(); refreshAll(); });
+  { const gsy=byId("stGutSys"); if(gsy) gsy.onchange=()=>{ s.gutterType=gsy.value; s.defaultDownspoutSize=gutterStyle(s.gutterType).dsDefault; openSettings(); refreshAll(); }; }
   b.querySelectorAll("[data-mit]").forEach(x=>x.onclick=()=>{ s.regularMiter=x.dataset.mit; openSettings(); refreshAll(); });
   const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; refreshAll(); }; };
   num("stBay","bayDeviation");
@@ -3567,7 +3712,37 @@ updateUndoButtons();
 /* ============================================================ */
 /* SAVE / LOAD / NEW                                           */
 /* ============================================================ */
-function serialize(){ return JSON.stringify({v:1,project:P,nextId,stampPresets},null,2); }
+function serialize(){
+  captureActive();
+  return JSON.stringify({v:2, meta:P.meta, photos:P.photos, nextId, stampPresets, active:activeOpt,
+    options:OPTIONS.map(o=>({id:o.id,name:o.name,settings:o.settings,objects:o.objects}))}, null, 2);
+}
+// load a parsed save (v2 options format, or legacy single-drawing) into OPTIONS + shared state
+function applyLoaded(d){
+  const dp=defaultProject();
+  if(d && Array.isArray(d.options)){
+    P.meta=Object.assign(dp.meta, d.meta||{});
+    P.photos=d.photos||[];
+    OPTIONS=d.options.map((o,i)=>({ id:o.id||(i+1), name:o.name||("Option "+(i+1)),
+      settings:Object.assign(JSON.parse(JSON.stringify(dp.settings)), o.settings||{}),
+      objects:o.objects||[], history:[], hidx:-1 }));
+    optSeq=OPTIONS.reduce((m,o)=>Math.max(m,o.id||0),0)+1;
+    activeOpt=Math.min(Math.max(0,d.active||0), OPTIONS.length-1);
+  } else {
+    const proj=(d&&d.project)||d||{};
+    P.meta=Object.assign(dp.meta, proj.meta||{});
+    P.photos=proj.photos||[];
+    OPTIONS=[{ id:1, name:"Option 1",
+      settings:Object.assign(JSON.parse(JSON.stringify(dp.settings)), proj.settings||{}),
+      objects:proj.objects||[], history:[], hidx:-1 }];
+    optSeq=2; activeOpt=0;
+  }
+  nextId=(d&&d.nextId) || (OPTIONS.reduce((m,o)=>Math.max(m,(o.objects||[]).reduce((mm,x)=>Math.max(mm,x.id||0),0)),0)+1);
+  if(d&&d.stampPresets&&d.stampPresets.length){ stampPresets.length=0; d.stampPresets.forEach(s=>stampPresets.push(s)); activeStamp=stampPresets[0]; }
+  const o=OPTIONS[activeOpt];
+  P.settings=o.settings; P.objects=o.objects;
+  ensurePrices(); seedHistory(); o.history=history; o.hidx=hidx;
+}
 /* when running inside the native iOS shell, hand saves/prints to Swift;
    in a normal browser these return null and the web path runs unchanged */
 function geNative(name){
@@ -3592,25 +3767,21 @@ byId("fileInput").onchange=e=>{
   const rd=new FileReader();
   rd.onload=()=>{
     try{
-      const d=JSON.parse(rd.result);
-      const proj=d.project||d;
-      P=Object.assign(defaultProject(),proj);
-      P.settings=Object.assign(defaultProject().settings,proj.settings||{});
-      P.meta=Object.assign(defaultProject().meta,proj.meta||{});
-      P.objects=proj.objects||[]; P.photos=proj.photos||[];
-      nextId=d.nextId|| (P.objects.reduce((m,o)=>Math.max(m,o.id||0),0)+1);
-      if(d.stampPresets&&d.stampPresets.length){ stampPresets.length=0; d.stampPresets.forEach(s=>stampPresets.push(s)); activeStamp=stampPresets[0]; }
-      sel.clear(); ensurePrices();
+      applyLoaded(JSON.parse(rd.result));
+      sel.clear();
       byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
-      buildRail(); buildDock(); buildOptbar(); zoomFit(); refreshAll();
+      buildRail(); buildDock(); buildOptbar(); buildOptionsBar(); zoomFit(); refreshAll();
     }catch(err){ alert("Could not read that file: "+err.message); }
   };
   rd.readAsText(f); e.target.value="";
 };
-byId("btnNew").onclick=()=>{  if(P.objects.length||P.photos.length){ if(!confirm("Start a new estimate? Unsaved changes will be lost.")) return; }
+byId("btnNew").onclick=()=>{
+  captureActive();
+  if(OPTIONS.some(o=>o.objects&&o.objects.length)||(P.photos&&P.photos.length)){ if(!confirm("Start a new estimate? Unsaved changes will be lost.")) return; }
   P=defaultProject(); nextId=1; sel.clear();
+  initSingleOption(); seedHistory(); OPTIONS[0].history=history; OPTIONS[0].hidx=hidx;
   byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
-  buildRail(); buildOptbar(); zoomFit(); refreshAll();
+  buildRail(); buildOptbar(); buildOptionsBar(); zoomFit(); refreshAll();
 };
 
 /* light autosave to localStorage (guarded for file://) */
@@ -3619,13 +3790,7 @@ function loadLocal(){
   try{
     const s=localStorage.getItem("primeGutterEstimate");
     if(!s) return false;
-    const d=JSON.parse(s); const proj=d.project||d;
-    P=Object.assign(defaultProject(),proj);
-    P.settings=Object.assign(defaultProject().settings,proj.settings||{});
-    P.meta=Object.assign(defaultProject().meta,proj.meta||{});
-    P.objects=proj.objects||[]; P.photos=proj.photos||[];
-    nextId=d.nextId||(P.objects.reduce((m,o)=>Math.max(m,o.id||0),0)+1);
-    if(d.stampPresets&&d.stampPresets.length){ stampPresets.length=0; d.stampPresets.forEach(x=>stampPresets.push(x)); activeStamp=stampPresets[0]; }
+    applyLoaded(JSON.parse(s));
     return true;
   }catch(e){ return false; }
 }
@@ -3662,26 +3827,87 @@ async function photoSnapshot(ph){
     im.src=ph.dataUrl;
   });
 }
-async function buildPrintDoc(){
-  if(curPage!=="diagram") setPage("diagram");
-  const saved={...cam};
-  zoomFit(); draw();
-  const diagram = P.objects.length ? canvas.toDataURL("image/png") : "";
-  Object.assign(cam,saved); draw();
+// pick which options go into the PDF (skips the dialog when there's only one)
+function chooseExportOptions(){
+  return new Promise(resolve=>{
+    if(OPTIONS.length<=1){ resolve([0]); return; }
+    captureActive();
+    let h=`<div class="note" style="margin-bottom:10px">Choose which option(s) to include in the PDF.</div>`;
+    OPTIONS.forEach((o,i)=>{ h+=`<label class="fld" style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" data-opt="${i}" checked style="width:auto;flex:0 0 auto"><span style="font-weight:700;flex:1">${esc(o.name)}</span><span style="color:var(--text-soft)">${money(optionTotal(o))}</span></label>`; });
+    h+=`<div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="btn-sm" id="expAll">All</button><button class="btn-sm" id="expNone">None</button><button class="btn-sm" id="expGo" style="margin-left:auto;background:var(--prime);color:#fff;border-color:var(--prime)">Export PDF</button></div>`;
+    openModal("Export options", h);
+    const body=byId("modalBody");
+    body.querySelector("#expAll").onclick=()=>body.querySelectorAll("[data-opt]").forEach(c=>c.checked=true);
+    body.querySelector("#expNone").onclick=()=>body.querySelectorAll("[data-opt]").forEach(c=>c.checked=false);
+    body.querySelector("#expGo").onclick=()=>{ const idxs=[...body.querySelectorAll("[data-opt]:checked")].map(c=>+c.dataset.opt); closeModal(); resolve(idxs); };
+  });
+}
 
+async function buildPrintDoc(){
+  const chosen = await chooseExportOptions();
+  if(!chosen || !chosen.length) return;
+  if(curPage!=="diagram") setPage("diagram");
+  captureActive();
+  const savedActive=activeOpt, savedCam={...cam};
+  const m=P.meta;
+  const showHeads = OPTIONS.length>1;
+
+  // shared photos (same house for every option)
   const photoURLs=[];
   for(const ph of P.photos){ photoURLs.push(await photoSnapshot(ph)); }
 
-  const r=compute(); const m=P.meta; const s=P.settings;
-  const flat=s.pricingMode==="flat";
-  let rows="";
-  for(const L of LINES){
-    const qty=r.q[L.key]||0; if(qty===0 && L.src==="auto" && !["gutter6","gutter5"].includes(L.key)) {/* still show */}
-    const qtyTxt=L.kind==="ft"?ftStr(qty):(Math.round(qty*10)/10);
-    rows+=`<tr><td>${L.label}</td><td class="n">${qty?qtyTxt:""}</td>`;
-    if(!flat){ rows+=`<td class="n">${P.settings.prices[L.key]?money(P.settings.prices[L.key]):""}</td><td class="n">${r.amt[L.key]?money(r.amt[L.key]):""}</td>`; }
-    rows+=`</tr>`;
+  // one section per chosen option; aggregate color-chart usage across them
+  const usedByBrand={}; const brandSet=new Set();
+  const addRole=(brand,name,role)=>{ if(!name)return; const mm=usedByBrand[brand]=usedByBrand[brand]||{}; (mm[name]=mm[name]||[]); if(!mm[name].includes(role)) mm[name].push(role); };
+  const disclaimer=`<p class="muted" style="margin-top:14px">Includes all labor and materials, 100% clean up, haul away. Estimate based on visual inspection; a change order will be submitted for additional work. 25% deposit required; remaining balance due upon completion. Lifetime paint and materials warranty.</p>`;
+  let optionSections="";
+  for(let k=0;k<chosen.length;k++){
+    const opt=OPTIONS[chosen[k]]; if(!opt) continue;
+    P.settings=opt.settings; P.objects=opt.objects; ensurePrices();
+    zoomFit(); draw();
+    const diagram = P.objects.length ? canvas.toDataURL("image/png") : "";
+    const s=P.settings; const r=compute();
+    const gBrand=s.gutterBrand||"Spectra", dBrand=s.downspoutBrand||"Spectra"; brandSet.add(gBrand); brandSet.add(dBrand);
+    for(const o of P.objects){ if(o.t==="gutter") addRole(effBrand(o),o.color||s.gutterColor,"Gutter"); else if(o.t==="ds") addRole(effBrand(o),o.color||s.downspoutColor,"Downspout"); }
+    const colorBlock=`<div class="colorline"><b>Gutter color:</b> ${esc(gBrand)} ${esc(s.gutterColor)} &nbsp;&nbsp; <b>Downspout color:</b> ${esc(dBrand)} ${esc(s.downspoutColor)}</div>`;
+    const mats=materialList();
+    const matRows=mats.map(x=>{ const sw=`<span class="msw" style="background:${swatchHex(x.color,x.brand)}"></span>`; const name=x.color?(/^#/.test(x.color)?"":esc(x.color)):""; const colTxt=x.color?((x.brand?esc(x.brand)+" ":"")+name):"—"; return `<tr><td>${esc(x.item)}</td><td class="n">${x.qty} ${x.unit}</td><td>${x.color?sw:""}${colTxt}</td></tr>`; }).join("");
+    const materialHTML = mats.length ? `<h3 class="sec">Material List</h3><table class="mat"><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th>Color</th></tr></thead><tbody>${matRows}</tbody></table>` : "";
+    const totalsTable=`<table class="tot avoid">
+      <tr><td>Total gutter footage</td><td class="n">${ftStr(r.gutterFootage)}</td></tr>
+      <tr><td>Downspout footage</td><td class="n">${ftStr(r.dsFootage)}</td></tr>
+      ${(+s.miscDemoLabor)?`<tr><td>Misc / Demo / Labor</td><td class="n">${money(s.miscDemoLabor)}</td></tr>`:""}
+      ${r.customTotal?`<tr><td>Custom products</td><td class="n">${money(r.customTotal)}</td></tr>`:""}
+      ${r.demoAmount?`<tr><td>Demo (${ftStr(r.demoFeet)})</td><td class="n">${money(r.demoAmount)}</td></tr>`:""}
+      ${(r.screenRows||[]).map(sc=>`<tr><td>Gutter screen — ${esc(sc.name)} (${ftStr(sc.feet)})</td><td class="n">${money(sc.amount)}</td></tr>`).join("")}
+      ${s.payMethod==="card"&&r.cardFee?`<tr><td>Card fee (${s.cardFee}%)</td><td class="n">${money(r.cardFee)}</td></tr>`:""}
+      <tr class="grand"><td>Turnkey Total</td><td class="n">${money(r.grand)}</td></tr>
+      <tr><td>${s.depositPct}% Deposit</td><td class="n">${money(r.deposit)}</td></tr>
+      <tr><td>Balance on completion</td><td class="n">${money(r.remaining)}</td></tr>
+    </table>`;
+    const diagramHTML = diagram ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">${showHeads?esc(opt.name)+" — ":""}Diagram</h3><img class="diagram" src="${diagram}"></div>` : "";
+    const head = showHeads ? `<h2 class="opt-title">${esc(opt.name)} — ${money(r.grand)}</h2>` : "";
+    optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimer}</section>${diagramHTML}`;
   }
+  // restore the live (active) option + camera
+  P.settings=OPTIONS[savedActive].settings; P.objects=OPTIONS[savedActive].objects; ensurePrices();
+  Object.assign(cam,savedCam); draw();
+
+  // aggregated color chart(s) across the chosen options
+  const chartBrands=[...new Set([...brandSet, ...Object.keys(usedByBrand)])];
+  const BRAND_LABEL={Spectra:"Spectra Metal Sales",ABC:"ABC Southwest Rainware"};
+  const colorChartHTML=chartBrands.map(brand=>{
+    const used=usedByBrand[brand]||{};
+    const cells=brandColorList(brand).map(c=>{ const roles=used[c.n]; return `<div class="cc ${roles?"sel":""}"><span class="ccsw" style="background:${c.h}"></span><span class="ccn">${esc(c.n)}</span>${roles?`<span class="ccr">${esc(roles.join(" / "))}</span>`:""}</div>`; }).join("");
+    return `<div class="avoid chart-page"><h3 class="sec">${esc(BRAND_LABEL[brand]||brand)} — Color Chart</h3><div class="muted" style="margin:2px 0 8px">Circled swatches are the colors selected for this job.</div><div class="chart">${cells}</div></div>`;
+  }).join("");
+
+  // shared photos + info appendix
+  const photos = photoURLs.filter(Boolean);
+  let photosHTML="";
+  if(photos.length){ photosHTML=`<h3 class="sec photo-head">Job Photos</h3>`; for(let i=0;i<photos.length;i+=4){ const cells=photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join(""); photosHTML+=`<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`; } }
+  const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
+
   const css=`*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
     body{font-family:Arial,Helvetica,sans-serif;color:#1b2530;margin:0;padding:26px}
     h1{color:#c8202a;font-size:22px;margin:0}
@@ -3730,63 +3956,11 @@ async function buildPrintDoc(){
     @page{margin:0.5in}
     /* hide the on-screen Print button by default so the print formatter (incl. WKWebView,
        which doesn't always honor @media print) never paginates it onto a trailing blank page */
+    .opt-title{color:#1b2530;font-size:17px;margin:18px 0 8px;padding:7px 10px;background:#eef2f6;border-left:5px solid #c8202a;border-radius:4px}
+    .option-sec.optbreak{break-before:page;page-break-before:always}
     .noprint{display:none}
     @media screen{.noprint{display:inline-block}}
     @media print{.noprint{display:none} .chart{grid-template-columns:repeat(4,1fr)} body{padding:0}}`;
-  const gBrand=s.gutterBrand||"Spectra", dBrand=s.downspoutBrand||"Spectra";
-  const colorBlock=`<div class="colorline"><b>Gutter color:</b> ${esc(gBrand)} ${esc(s.gutterColor)} &nbsp;&nbsp; <b>Downspout color:</b> ${esc(dBrand)} ${esc(s.downspoutColor)}</div>`;
-
-  // which colors are selected for this job, tracked per brand chart (for circling).
-  // Each object marks its own effective brand's chart (per-object override or job default).
-  const usedByBrand={};   // { brand: { colorName: [roles] } }
-  const addRole=(brand,name,role)=>{ if(!name)return; const m=usedByBrand[brand]=usedByBrand[brand]||{}; (m[name]=m[name]||[]); if(!m[name].includes(role)) m[name].push(role); };
-  for(const o of P.objects){
-    if(o.t==="gutter") addRole(effBrand(o),o.color||s.gutterColor,"Gutter");
-    else if(o.t==="ds") addRole(effBrand(o),o.color||s.downspoutColor,"Downspout");
-  }
-  // render a chart for every brand in play: the job defaults plus any per-object overrides
-  const chartBrands=[...new Set([gBrand,dBrand,...Object.keys(usedByBrand)])];
-  const BRAND_LABEL={Spectra:"Spectra Metal Sales",ABC:"ABC Southwest Rainware"};
-  const colorChartHTML=chartBrands.map(brand=>{
-    const used=usedByBrand[brand]||{};
-    const cells=brandColorList(brand).map(c=>{
-      const roles=used[c.n];
-      return `<div class="cc ${roles?"sel":""}"><span class="ccsw" style="background:${c.h}"></span><span class="ccn">${esc(c.n)}</span>${roles?`<span class="ccr">${esc(roles.join(" / "))}</span>`:""}</div>`;
-    }).join("");
-    return `<div class="avoid chart-page"><h3 class="sec">${esc(BRAND_LABEL[brand]||brand)} — Color Chart</h3>
-    <div class="muted" style="margin:2px 0 8px">Circled swatches are the colors selected for this job.</div>
-    <div class="chart">${cells}</div></div>`;
-  }).join("");
-
-  // material list (bill of materials) with qty + brand/color
-  const mats=materialList();
-  const matRows=mats.map(x=>{
-    const sw=`<span class="msw" style="background:${swatchHex(x.color,x.brand)}"></span>`;
-    const name = x.color ? (/^#/.test(x.color)?"":esc(x.color)) : "";
-    const colTxt = x.color ? ((x.brand?esc(x.brand)+" ":"")+name) : "—";
-    return `<tr><td>${esc(x.item)}</td><td class="n">${x.qty} ${x.unit}</td><td>${x.color?sw:""}${colTxt}</td></tr>`;
-  }).join("");
-  const materialHTML = mats.length ? `<h3 class="sec">Material List</h3>
-    <table class="mat"><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th>Color</th></tr></thead><tbody>${matRows}</tbody></table>` : "";
-
-  // diagram on its very own page so it's never cut across a page break
-  const diagramHTML = diagram
-    ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">Diagram</h3><img class="diagram" src="${diagram}"></div>`
-    : "";
-
-  // photos: 4 to a page (2×2), each group kept whole
-  const photos = photoURLs.filter(Boolean);
-  let photosHTML = "";
-  if(photos.length){
-    photosHTML = `<h3 class="sec photo-head">Job Photos</h3>`;
-    for(let i=0;i<photos.length;i+=4){
-      const cells = photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join("");
-      photosHTML += `<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`;
-    }
-  }
-
-  // customer information / terms appendix — verbatim company page, always included
-  const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
 
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Estimate ${esc(m.name||"")}</title><style>${css}</style></head><body>
     <div class="head">
@@ -3796,22 +3970,7 @@ async function buildPrintDoc(){
     <table class="info"><tr><td><b>Name</b></td><td>${esc(m.name)}</td><td><b>Phone</b></td><td>${esc(m.phone)}</td></tr>
       <tr><td><b>Address</b></td><td>${esc(m.address)}</td><td><b>Cell</b></td><td>${esc(m.cell)}</td></tr>
       <tr><td><b>E-mail</b></td><td>${esc(m.email)}</td><td><b>Gate code</b></td><td>${esc(m.gateCode)}</td></tr></table>
-    ${colorBlock}
-    ${materialHTML}
-    <table class="tot avoid">
-      <tr><td>Total gutter footage</td><td class="n">${ftStr(r.gutterFootage)}</td></tr>
-      <tr><td>Downspout footage</td><td class="n">${ftStr(r.dsFootage)}</td></tr>
-      ${(+s.miscDemoLabor)?`<tr><td>Misc / Demo / Labor</td><td class="n">${money(s.miscDemoLabor)}</td></tr>`:""}
-      ${r.customTotal?`<tr><td>Custom products</td><td class="n">${money(r.customTotal)}</td></tr>`:""}
-      ${r.demoAmount?`<tr><td>Demo (${ftStr(r.demoFeet)})</td><td class="n">${money(r.demoAmount)}</td></tr>`:""}
-      ${(r.screenRows||[]).map(sc=>`<tr><td>Gutter screen — ${esc(sc.name)} (${ftStr(sc.feet)})</td><td class="n">${money(sc.amount)}</td></tr>`).join("")}
-      ${s.payMethod==="card"&&r.cardFee?`<tr><td>Card fee (${s.cardFee}%)</td><td class="n">${money(r.cardFee)}</td></tr>`:""}
-      <tr class="grand"><td>Turnkey Total</td><td class="n">${money(r.grand)}</td></tr>
-      <tr><td>${s.depositPct}% Deposit</td><td class="n">${money(r.deposit)}</td></tr>
-      <tr><td>Balance on completion</td><td class="n">${money(r.remaining)}</td></tr>
-    </table>
-    <p class="muted" style="margin-top:14px">Includes all labor and materials, 100% clean up, haul away. Estimate based on visual inspection; a change order will be submitted for additional work. 25% deposit required; remaining balance due upon completion. Lifetime paint and materials warranty.</p>
-    ${diagramHTML}
+    ${optionSections}
     ${colorChartHTML}
     ${photosHTML}
     ${infoPageHTML}
@@ -3829,7 +3988,7 @@ byId("btnPrint").onclick=buildPrintDoc;
 /* ============================================================ */
 /* KEYBOARD                                                    */
 /* ============================================================ */
-const TOOLKEYS={v:"select",h:"hand",g:"gutter6",d:"ds3x4","6":"gutter6","5":"gutter5","3":"ds3x4","2":"ds2x3",s:"valley",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
+const TOOLKEYS={v:"select",h:"hand",g:"gutter",d:"ds",s:"valley",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
 window.addEventListener("keydown",e=>{
   const tag=(e.target.tagName||"").toLowerCase();
   const typing = tag==="input"||tag==="textarea"||tag==="select"||e.target.isContentEditable;
@@ -3874,14 +4033,14 @@ refreshAll=function(){ _origRefreshAll(); scheduleSave(); };
 /* ============================================================ */
 function init(){
   ensurePrices();
-  loadLocal();
+  if(!loadLocal()){ initSingleOption(); seedHistory(); }
   resize();
   buildDock();
   buildRail();
-  setTool("gutter6");
+  setTool("gutter");
   buildOptbar();
+  buildOptionsBar();
   updateZoomLabel();
-  recordHistory();
   centerView();
   setHint(toolHint("gutter"));
   // re-measure after the browser/webview has settled layout (fixes blank or corner grid)
