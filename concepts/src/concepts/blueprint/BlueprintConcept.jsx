@@ -23,6 +23,22 @@ function snapToAxis(prev, p, threshold = 10) {
   return p
 }
 
+// Snap a point to the nearest 22.5° angle increment from the previous point.
+function snapToAngle(prev, p) {
+  if (!prev) return p
+  const dx = p.x - prev.x
+  const dy = p.y - prev.y
+  const dist = Math.sqrt(dx * dx + dy * dy)
+  if (dist < 1) return p
+  const angle = Math.atan2(dy, dx)
+  const step = Math.PI / 8 // 22.5°
+  const snapped = Math.round(angle / step) * step
+  return {
+    x: prev.x + dist * Math.cos(snapped),
+    y: prev.y + dist * Math.sin(snapped),
+  }
+}
+
 const snapGrid = (v) => Math.round(v / GRID) * GRID
 
 export default function BlueprintConcept() {
@@ -31,6 +47,7 @@ export default function BlueprintConcept() {
   const [draft, setDraft] = useState([]) // points of run-in-progress
   const [cursor, setCursor] = useState(null)
   const [snapOn, setSnapOn] = useState(true)
+  const [angleSnap, setAngleSnap] = useState(false)
   const [gridSnap, setGridSnap] = useState(true)
   const [pricePerFoot, setPricePerFoot] = useState(DEFAULT_SETTINGS.pricePerFoot)
   const [dropCode, setDropCode] = useState('')
@@ -54,7 +71,8 @@ export default function BlueprintConcept() {
   function processPoint(p) {
     let pt = p
     const prev = draft[draft.length - 1]
-    if (snapOn) pt = snapToAxis(prev, pt)
+    if (angleSnap) pt = snapToAngle(prev, pt)
+    else if (snapOn) pt = snapToAxis(prev, pt)
     if (gridSnap) pt = { x: snapGrid(pt.x), y: snapGrid(pt.y) }
     return {
       x: Math.max(0, Math.min(W, pt.x)),
@@ -127,6 +145,7 @@ export default function BlueprintConcept() {
       <div className="bp__canvas-wrap">
         <div className="bp__toolbar">
           <ToolToggle on={snapOn} onClick={() => setSnapOn((v) => !v)} label="Axis snap" />
+          <ToolToggle on={angleSnap} onClick={() => setAngleSnap((v) => !v)} label="22.5° snap" />
           <ToolToggle on={gridSnap} onClick={() => setGridSnap((v) => !v)} label="Grid snap" />
           <span className="bp__sep" />
           <button className="bp__btn" onClick={undoPoint} disabled={!draft.length}>
