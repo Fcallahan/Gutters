@@ -370,7 +370,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
           </div>
           <div class="ob-grp" style="display:flex;gap:6px;align-items:center">
             <input type="color" id="photoColor" value="#e01b24" style="width:34px;height:26px;border:0;background:none;cursor:pointer">
-            <input type="range" id="photoWidth" min="1" max="14" value="4" style="width:72px" title="Line / pen width">
+            <input type="range" id="photoWidth" min="1" max="20" value="7" style="width:72px" title="Line / pen width">
           </div>
         </div>
         <div id="photoScroll">
@@ -476,7 +476,7 @@ const BOX_COLORS = ["#ffffff","#fde2e2","#ffe9cc","#fff7cc","#e2f4dd","#d9ecf7",
 
 function defaultProject(){
   return {
-    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:""},
+    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:""},
     settings:{
       gutterType:"6K",            // default gutter style id (see GUTTER_STYLES)
       defaultDownspoutSize:"3x4", // default downspout size id (auto-follows the gutter style)
@@ -485,8 +485,8 @@ function defaultProject(){
       downspoutBrand:"Spectra",   // Spectra | ABC  — manufacturer color chart for downspouts
       downspoutColor:"Colonial Gray",
       regularMiter:"strip",         // box | strip  (for ~90° corners)
-      footagePerCorner:0,         // ft added to total per corner
-      footagePerOutlet:0,         // ft added to total per outlet
+      footagePerCorner:1,         // ft added to total per corner
+      footagePerOutlet:1,         // ft added to total per outlet
       footagePerValley:2,         // ft per valley shield
       footagePerElbow:1,          // ft added to total per elbow (A or B)
       footagePerOffset:1,         // ft added to total per offset (2"/4"/6")
@@ -500,7 +500,7 @@ function defaultProject(){
       autoMeasure:false,          // auto-fill segment lengths from drawn scale
       feetPerSquare:5,            // feet represented by one grid square when auto-measuring
       customProducts:[],          // [{id,name,pricePerFoot,color,mode}] user-defined products; mode: line|demo|screen
-      pricingMode:"flat",         // flat | itemized
+      pricingMode:"itemized",     // flat | itemized
       flatGutterRate:9,
       flatDownspoutRate:9,
       demoRate:0,                 // $/ft for the Demo highlight tool (footage rounds up to whole ft)
@@ -532,9 +532,14 @@ function uid(){ return nextId++; }
 const GUTTER_STYLES = [
   {id:"5K",  label:'5" K-style',     short:'5"K',  wide:false, priceKey:"gutter5",   endKey:"endcap5",   ds:["3x4","2x3"],    dsDefault:"3x4"},
   {id:"6K",  label:'6" K-style',     short:'6"K',  wide:true,  priceKey:"gutter6",   endKey:"endcap6",   ds:["3x4","4round"], dsDefault:"3x4"},
-  {id:"6HR", label:'6" Half-round',  short:'6"HR', wide:true,  priceKey:"gutter6hr", endKey:"endcap6hr", ds:["4round"],       dsDefault:"4round"},
-  {id:"7K",  label:'7" K-style',     short:'7"K',  wide:true,  priceKey:"gutter7",   endKey:"endcap7",   ds:["3x4","4x5"],    dsDefault:"3x4"},
+  {id:"6HR", label:'6" Half-round',  short:'6"HR', wide:true,  priceKey:"gutter6hr", endKey:"endcap6hr", ds:["4round"],       dsDefault:"4round", miterKey:"miter6hr", miterLabel:"Half-round miter"},
+  {id:"7K",  label:'7" K-style',     short:'7"K',  wide:true,  priceKey:"gutter7",   endKey:"endcap7",   ds:["3x4","4x5"],    dsDefault:"3x4",     miterKey:"miter7",   miterLabel:'7" K miter'},
 ];
+// default per-style $/ft (also seeds that style's end caps, miters & matching outlets via ensurePrices)
+const STYLE_DEFAULTS = {
+  gutter5:10, gutter6:10.5, gutter6hr:16, gutter7:15,
+  ds2x3:10, ds3x4:10.5, ds4round:14.5, ds4x5:29,
+};
 const DS_STYLES = [
   {id:"2x3",    label:'2"×3"',      short:'2×3',      priceKey:"ds2x3",    outletKey:"outlet2x3",    elbowKey:"elbow2x3",    offsetKey:"offset2x3"},
   {id:"3x4",    label:'3"×4"',      short:'3×4',      priceKey:"ds3x4",    outletKey:"outlet3x4",    elbowKey:"elbow3x4",    offsetKey:"offset3x4"},
@@ -551,13 +556,53 @@ const PRICE_KEYS = [
   "diverters",
   ...DS_STYLES.map(d=>d.outletKey),
   "valley","splash","leaf6","leaf5","strip","box","bay",
+  ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>g.miterKey),
   ...DS_STYLES.map(d=>d.elbowKey),
   ...DS_STYLES.map(d=>d.offsetKey),
   ...GUTTER_STYLES.map(g=>g.endKey),
 ];
+
+// Component unit prices that are DERIVED from a style $/ft (auto-synced, not hand-edited).
+// Gutter material: end caps, miters, outlets, valley shields. Downspout material: elbows, offsets.
+const DERIVED_KEYS = new Set([
+  ...GUTTER_STYLES.map(g=>g.endKey),
+  ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>g.miterKey),
+  "strip","box","bay","valley",
+  ...DS_STYLES.map(d=>d.outletKey),
+  ...DS_STYLES.map(d=>d.elbowKey),
+  ...DS_STYLES.map(d=>d.offsetKey),
+]);
+
+// Re-derive every style-related component price so all of a style's components match
+// that style's $/ft. End caps/outlets/valley shields are gutter material (priced from the
+// gutter style, multiplied by their LF allowance); elbows/offsets are downspout material;
+// miters match the gutter $/ft 1:1.
+function syncStylePricing(){
+  const p=P.settings.prices, s=P.settings;
+  const jobG = +p[gutterStyle(s.gutterType).priceKey]||0;   // job gutter $/ft drives shared gutter-material parts
+  GUTTER_STYLES.forEach(g=>{
+    const base=+p[g.priceKey]||0;
+    p[g.endKey]   = base*(+s.footagePerEndcap||0);   // end cap = its gutter style, ×LF allowance
+    if(g.miterKey) p[g.miterKey]=base;               // 6"HR / 7"K special miter = that gutter's $/ft
+  });
+  p.strip=jobG; p.box=jobG; p.bay=jobG;              // standard 5"K/6"K miters match the job gutter $/ft
+  p.valley = jobG*(+s.footagePerValley||0);          // valley shield = 2 LF of gutter material
+  DS_STYLES.forEach(d=>{
+    const dbase=+p[d.priceKey]||0;
+    p[d.outletKey] = jobG*(+s.footagePerOutlet||0);  // outlet = gutter material (hole in the gutter)
+    p[d.elbowKey]  = dbase*(+s.footagePerElbow||0);  // elbow  = its downspout style, ×LF allowance
+    p[d.offsetKey] = dbase*(+s.footagePerOffset||0); // offset = its downspout style, ×LF allowance
+  });
+}
+
 function ensurePrices(){
-  P.settings.prices = P.settings.prices || {};
-  PRICE_KEYS.forEach(k=>{ if(P.settings.prices[k]==null) P.settings.prices[k]=0; });
+  const p = P.settings.prices = P.settings.prices || {};
+  // seed master per-style $/ft prices
+  for(const k in STYLE_DEFAULTS){ if(p[k]==null) p[k]=STYLE_DEFAULTS[k]; }
+  // anything not seeded yet defaults to 0
+  PRICE_KEYS.forEach(k=>{ if(p[k]==null) p[k]=0; });
+  // derive all style-related component prices from the style $/ft
+  syncStylePricing();
 }
 
 /* ============================================================ */
@@ -833,7 +878,7 @@ function compute(){
   const q={diverters:+s.diverters||0, valley:0,
     splash:+s.splashBlocks||0, leaf6:+s.leafGuard6||0, leaf5:+s.leafGuard5||0,
     strip:0,box:0,bay:0};
-  GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; });
+  GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; if(g.miterKey) q[g.miterKey]=0; });
   DS_STYLES.forEach(d=>{ q[d.priceKey]=0; q[d.outletKey]=0; q[d.elbowKey]=0; q[d.offsetKey]=0; });
   let corners=0;
   const customAgg={};
@@ -850,7 +895,8 @@ function compute(){
       const cs=runCorners(o);
       for(const c of cs){
         corners++;
-        if(c.bay) q.bay++;
+        if(gs.miterKey) q[gs.miterKey]++;        // 6"HR & 7"K: their own special miter strip
+        else if(c.bay) q.bay++;
         else if(s.regularMiter==="strip") q.strip++; else q.box++;
       }
       // end caps: only on free (open) ends; corners/junctions/closed loops get none
@@ -950,6 +996,12 @@ function compute(){
 
 function money(n){ return "$"+(Math.round((+n||0)*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function ftStr(n){ n=+n||0; return (Math.round(n*10)/10)+"'"; }
+// ISO yyyy-mm-dd -> "Month D, YYYY" (parsed by parts to avoid UTC off-by-one)
+function fmtDate(iso){
+  const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso||""); if(!m) return iso||"";
+  const months=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  return months[+m[2]-1]+" "+(+m[3])+", "+m[1];
+}
 function colorHex(name,brand){
   if(!name) return "#888";
   if(brand){ const c=brandColorList(brand).find(c=>c.n===name); if(c) return c.h; }
@@ -980,8 +1032,9 @@ function materialList(){
       const k=brand+"|"+colorName;
       const ft=(o.lengths||[]).reduce((a,b)=>a+(+b||0),0);
       add(gut,size+"|"+k,{item:"Gutter "+size,unit:"ft",color:colorName,brand}).qty+=ft;
+      const gms=gutterStyle(gutterSizeFor(o));
       for(const c of runCorners(o)){
-        const part=c.bay?"Bay miter":(s.regularMiter==="strip"?"Strip miter":"Box miter");
+        const part=gms.miterKey ? gms.miterLabel : (c.bay?"Bay miter":(s.regularMiter==="strip"?"Strip miter":"Box miter"));
         add(gutParts,part+"|"+k,{item:part,unit:"ea",color:colorName,brand}).qty+=1;
       }
       const fe=freeEnds(o); const cm=o.caps||[true,true];
@@ -2879,6 +2932,7 @@ const LINES = [
   {key:"strip",    label:"STRIP MITER",      kind:"ea", src:"auto"},
   {key:"box",      label:"BOX MITER",        kind:"ea", src:"auto"},
   {key:"bay",      label:"BAY MITER",        kind:"ea", src:"auto"},
+  ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>({key:g.miterKey, label:g.miterLabel.toUpperCase(), kind:"ea", src:"auto"})),
   ...DS_STYLES.map(d=>({key:d.elbowKey,     label:'ELBOWS '+d.short,        kind:"ea", src:"auto"})),
   ...DS_STYLES.map(d=>({key:d.offsetKey,    label:'OFFSET '+d.short,        kind:"ea", src:"auto"})),
   ...GUTTER_STYLES.map(g=>({key:g.endKey,   label:'END CAPS '+g.short,      kind:"ea", src:"auto"})),
@@ -2914,7 +2968,9 @@ function buildEstimatePane(){
     h+=qtyCell;
     if(!flat){
       const price=P.settings.prices[L.key]||0;
-      h+=`<input class="ws-price" data-price="${L.key}" value="${price}" inputmode="decimal">`;
+      const derived=DERIVED_KEYS.has(L.key);
+      const attrs=derived?` readonly tabindex="-1" title="Auto-priced from the gutter / downspout style — edit under Pricing" style="color:var(--text-soft)"`:"";
+      h+=`<input class="ws-price" data-price="${L.key}" value="${price}"${attrs} inputmode="decimal">`;
       h+=`<div class="ws-amt">${money(r.amt[L.key]||0)}</div>`;
     }
     h+=`</div>`;
@@ -2962,6 +3018,7 @@ function buildEstimatePane(){
     inp.onchange=()=>{ P.settings[inp.dataset.setting]=+inp.value||0; refreshAll(); };
   });
   pane.querySelectorAll("input.ws-price").forEach(inp=>{
+    if(inp.hasAttribute("readonly")) return;   // AUTO components are derived from the style $/ft
     inp.onchange=()=>{ ensurePrices(); P.settings.prices[inp.dataset.price]=+inp.value||0; refreshAll(); };
   });
 }
@@ -2980,7 +3037,7 @@ function buildJobPane(){
   h+=`<div class="row2">${fld("Gate code","jiGate",m.gateCode)}${fld("Date","jiDate",m.date,"date")}</div>`;
   h+=`<div class="row2">${fld("Phone","jiPhone",m.phone,"tel")}${fld("Cell","jiCell",m.cell,"tel")}</div>`;
   h+=fld("E-mail","jiEmail",m.email,"email");
-  h+=fld("Salesperson","jiSales",m.salesperson);
+  h+=`<div class="row2">${fld("Salesperson","jiSales",m.salesperson)}${fld("Salesperson phone","jiSalesPhone",m.salespersonPhone,"tel")}</div>`;
   const brandOpts=(sel)=>BRANDS.map(b=>'<option value="'+b+'"'+(b===sel?' selected':'')+'>'+b+'</option>').join("");
   h+=`<div class="sec-h">Colors</div>`;
   h+=`<div class="fld"><label>Gutter brand</label><select id="jiGutBrand" aria-label="Gutter brand">${brandOpts(gutterBrand())}</select></div>`;
@@ -2992,7 +3049,7 @@ function buildJobPane(){
 
   const bind=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ P.meta[key]=e.value; }; };
   bind("jiName","name");bind("jiAddr","address");bind("jiGate","gateCode");bind("jiDate","date");
-  bind("jiPhone","phone");bind("jiCell","cell");bind("jiEmail","email");bind("jiSales","salesperson");
+  bind("jiPhone","phone");bind("jiCell","cell");bind("jiEmail","email");bind("jiSales","salesperson");bind("jiSalesPhone","salespersonPhone");
   // changing a brand: keep the color if it exists in the new brand, else fall back to that brand's first color
   byId("jiGutBrand").onchange=e=>{ P.settings.gutterBrand=e.target.value; const list=brandColorList(e.target.value); if(!list.some(c=>c.n===P.settings.gutterColor)) P.settings.gutterColor=list[0].n; buildJobPane(); refreshAll(); };
   byId("jiDsBrand").onchange=e=>{ P.settings.downspoutBrand=e.target.value; const list=brandColorList(e.target.value); if(!list.some(c=>c.n===P.settings.downspoutColor)) P.settings.downspoutColor=list[0].n; buildJobPane(); refreshAll(); };
@@ -3011,16 +3068,16 @@ function buildPricingPane(){
   h+=`<div class="sec-h">Gutter style pricing <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ / ft</span></div>`;
   h+=`<div class="worksheet"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Style</div><div>$ / ft</div></div>`;
   for(const gst of GUTTER_STYLES){
-    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${gst.label}</div><input class="ws-price" data-price="${gst.priceKey}" value="${s.prices[gst.priceKey]||0}" inputmode="decimal"></div>`;
+    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${gst.label}</div><input class="ws-price" data-price="${gst.priceKey}" data-cascade="1" value="${s.prices[gst.priceKey]||0}" inputmode="decimal"></div>`;
   }
   h+=`</div>`;
   h+=`<div class="sec-h">Downspout style pricing <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ / ft</span></div>`;
   h+=`<div class="worksheet"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Size</div><div>$ / ft</div></div>`;
   for(const dst of DS_STYLES){
-    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${dst.label}</div><input class="ws-price" data-price="${dst.priceKey}" value="${s.prices[dst.priceKey]||0}" inputmode="decimal"></div>`;
+    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${dst.label}</div><input class="ws-price" data-price="${dst.priceKey}" data-cascade="1" value="${s.prices[dst.priceKey]||0}" inputmode="decimal"></div>`;
   }
   h+=`</div>`;
-  h+=`<div class="note">These per-style rates drive the itemized estimate. In flat $/ft mode the single rates below are used instead.</div>`;
+  h+=`<div class="note">These per-style rates drive the itemized estimate. Editing a style's rate also sets that style's end caps, miters and (for downspouts) outlets to the same price — fine-tune any of those individually below. In flat $/ft mode the single rates below are used instead.</div>`;
 
   if(flat){
     h+=`<div class="sec-h">Flat rates</div>`;
@@ -3028,12 +3085,14 @@ function buildPricingPane(){
     h+=`<div class="note">Flat mode multiplies total gutter footage (including corner, outlet, and valley allowances) by your $/ft. Per-component prices are ignored.</div>`;
   } else {
     h+=`<div class="sec-h">Per-component unit prices</div>`;
-    h+=`<div class="fld"><label>Set every component to one rate</label><div class="colorsel"><input id="pcAll" type="number" step="0.25" placeholder="$ each" inputmode="decimal" style="flex:1"><button class="btn-sm" id="pcApplyAll">Apply to all</button></div></div>`;
     h+=`<div class="worksheet" style="margin-top:6px"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Component</div><div>Unit $</div></div>`;
     for(const L of LINES){
-      h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${L.label}</div><input class="ws-price" data-price="${L.key}" value="${s.prices[L.key]||0}" inputmode="decimal"></div>`;
+      const derived=DERIVED_KEYS.has(L.key);
+      const attrs=derived?` readonly tabindex="-1" title="Auto-priced from the gutter / downspout style above" style="color:var(--text-soft);background:#f4f6f8"`:"";
+      h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${L.label}${derived?' <span style="color:var(--steel-2);font-weight:700;font-size:9px">AUTO</span>':''}</div><input class="ws-price" data-price="${L.key}"${derived?"":' data-edit="1"'} value="${s.prices[L.key]||0}"${attrs} inputmode="decimal"></div>`;
     }
     h+=`</div>`;
+    h+=`<div class="note">Components marked <b>AUTO</b> follow the gutter / downspout style price above: end caps, outlets &amp; valley shields are gutter material (valley = ${s.footagePerValley||0} LF), miters match the gutter $/ft, and elbows &amp; offsets follow the downspout $/ft. Edit a style rate to change them all at once.</div>`;
   }
 
   h+=`<div class="sec-h">Demo &amp; gutter screen</div>`;
@@ -3084,18 +3143,24 @@ function wirePricing(){
     s.gutterType=gsy.value; s.defaultDownspoutSize=gutterStyle(s.gutterType).dsDefault; buildPricingPane(); refreshAll();
   }; }
   const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; refreshAll(); }; };
+  // allowance fields feed the AUTO component prices, so rebuild the pane to show the new derived $
+  const numP=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; buildPricingPane(); refreshAll(); }; };
   num("pcGutRate","flatGutterRate");num("pcDsRate","flatDownspoutRate");
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
   num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");
-  num("pcCorner","footagePerCorner");num("pcOutlet","footagePerOutlet");num("pcValley","footagePerValley");
-  num("pcElbow","footagePerElbow");num("pcOffset","footagePerOffset");num("pcEndcap","footagePerEndcap");
+  num("pcCorner","footagePerCorner");numP("pcOutlet","footagePerOutlet");numP("pcValley","footagePerValley");
+  numP("pcElbow","footagePerElbow");numP("pcOffset","footagePerOffset");numP("pcEndcap","footagePerEndcap");
   num("pcBay","bayDeviation");
   const dd=byId("pcDsDef"); if(dd) dd.onchange=()=>{ s.defaultDownspoutSize=dd.value; refreshAll(); };
   byId("panePricing").querySelectorAll("input.ws-price").forEach(inp=>{
-    inp.onchange=()=>{ ensurePrices(); s.prices[inp.dataset.price]=+inp.value||0; refreshAll(); };
+    if(inp.hasAttribute("readonly")) return;     // AUTO components are derived, not hand-edited
+    inp.onchange=()=>{
+      ensurePrices();
+      s.prices[inp.dataset.price]=+inp.value||0;
+      if(inp.dataset.cascade) buildPricingPane();  // a style rate changed → re-derive AUTO components
+      refreshAll();
+    };
   });
-  const all=byId("pcApplyAll");
-  if(all) all.onclick=()=>{ const v=+byId("pcAll").value||0; ensurePrices(); PRICE_KEYS.forEach(k=>s.prices[k]=v); refreshAll(); };
 }
 
 let railBuilt=false;
@@ -3269,7 +3334,7 @@ byId("tabPhotos").onclick=()=>setPage("photos");
 /* ============================================================ */
 /* PHOTO MARKUP PAGE                                           */
 /* ============================================================ */
-let photoPen={color:"#e01b24",width:4};
+let photoPen={color:"#e01b24",width:7};
 let photoTool="pen";   // select | pen | line | text
 let photoLine=null;    // {ph, mark, redraw} in-progress polyline
 let photoSelMarks=new Set();  // selected mark references (current photo)
@@ -3355,9 +3420,12 @@ function updatePhotoLineBar(){
 })();
 
 /* ---- mark geometry helpers (normalized 0..1 coords) ---- */
+// On-canvas px for a photo callout. Scales with the displayed canvas width so text
+// stays legible & proportional instead of rendering at a fixed tiny size.
+function photoTextPx(st,cw){ return Math.max(18,(st.size||32)*cw/520); }
 function markBoundsN(st,cw,chh,pctx){
   if((st.type||"pen")==="text"){
-    const fs=Math.max(11,(st.size||16)*(cw/Math.min(520,cw)));
+    const fs=photoTextPx(st,cw);
     pctx.save();pctx.font="700 "+fs+"px Arial";const tw=pctx.measureText(st.text||"").width;pctx.restore();
     return {x0:st.x, y0:st.y, x1:st.x+(tw/cw), y1:st.y+(fs/chh)};
   }
@@ -3410,7 +3478,7 @@ function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
   for(const st of ph.strokes){
     const type=st.type||"pen";
     if(type==="text"){
-      const fs=Math.max(11,(st.size||16)*(cw/Math.min(520,ph.w)));
+      const fs=photoTextPx(st,cw);
       pctx.save();
       pctx.font="700 "+fs+"px Arial";
       pctx.textBaseline="top";
@@ -3582,7 +3650,7 @@ function renderPhotos(){
       } else if(photoTool==="text"){
         const hit=photoTextAt(ph,p,cw,chh,pctx);
         if(hit){ const t=prompt("Edit callout text:",hit.text); if(t!=null){ if(t.trim()===""){ recordHistory(); ph.strokes.splice(ph.strokes.indexOf(hit),1);} else { recordHistory(); hit.text=t; } redrawPhoto(); saveLocal(); } return; }
-        const t=prompt("Callout text:",""); if(t&&t.trim()){ recordHistory(); ph.strokes.push({type:"text",color:photoPen.color,size:16,x:p.x,y:p.y,text:t.trim()}); redrawPhoto(); saveLocal(); }
+        const t=prompt("Callout text:",""); if(t&&t.trim()){ recordHistory(); ph.strokes.push({type:"text",color:photoPen.color,size:32,x:p.x,y:p.y,text:t.trim()}); redrawPhoto(); saveLocal(); }
       }
     });
     cv.addEventListener("pointermove",ev=>{
@@ -3660,7 +3728,7 @@ function renderPhotosSelOnly(){ /* selection drawn within each card's redraw; no
 function photoTextAt(ph,p,cw,chh,pctx){
   for(let i=ph.strokes.length-1;i>=0;i--){
     const st=ph.strokes[i]; if((st.type||"")!=="text") continue;
-    const fs=Math.max(11,(st.size||16)*(cw/Math.min(520,ph.w)));
+    const fs=photoTextPx(st,cw);
     pctx.save();pctx.font="700 "+fs+"px Arial";const tw=pctx.measureText(st.text||"").width;pctx.restore();
     const x0=st.x*cw, y0=st.y*chh;
     const px=p.x*cw, py=p.y*chh;
@@ -3804,19 +3872,20 @@ async function photoSnapshot(ph){
     im.onload=()=>{
       const c=document.createElement("canvas"); c.width=ph.w; c.height=ph.h;
       const cx=c.getContext("2d"); cx.drawImage(im,0,0);
+      const pscale=ph.w/520;   // strokes/text are authored against a ~520px preview; scale up to full res so they aren't hairline-thin in the PDF
       for(const st of (ph.strokes||[])){
         const type=st.type||"pen";
         if(type==="text"){
-          const fs=Math.max(13,(st.size||16));
+          const fs=photoTextPx(st,ph.w);   // scale to the full-res photo, matching on-screen proportions
           cx.save();cx.font="700 "+fs+"px Arial";cx.textBaseline="top";
           const tx=st.x*ph.w, ty=st.y*ph.h, tw=cx.measureText(st.text||"").width;
           cx.fillStyle="rgba(255,255,255,.85)";roundRect(cx,tx-6,ty-4,tw+12,fs+8,5);cx.fill();
-          cx.strokeStyle=st.color||"#e01b24";cx.lineWidth=2;cx.stroke();
+          cx.strokeStyle=st.color||"#e01b24";cx.lineWidth=2*pscale;cx.stroke();
           cx.fillStyle=st.color||"#e01b24";cx.fillText(st.text||"",tx,ty);cx.restore();
           continue;
         }
         if(!st.pts||!st.pts.length)continue;
-        cx.save();cx.strokeStyle=st.color;cx.lineWidth=st.width;cx.lineCap="round";cx.lineJoin="round";
+        cx.save();cx.strokeStyle=st.color;cx.lineWidth=(st.width||7)*pscale;cx.lineCap="round";cx.lineJoin="round";
         cx.beginPath();cx.moveTo(st.pts[0].x*ph.w,st.pts[0].y*ph.h);
         for(let i=1;i<st.pts.length;i++)cx.lineTo(st.pts[i].x*ph.w,st.pts[i].y*ph.h);
         cx.stroke();cx.restore();
@@ -3881,10 +3950,11 @@ async function buildPrintDoc(){
       ${r.demoAmount?`<tr><td>Demo (${ftStr(r.demoFeet)})</td><td class="n">${money(r.demoAmount)}</td></tr>`:""}
       ${(r.screenRows||[]).map(sc=>`<tr><td>Gutter screen — ${esc(sc.name)} (${ftStr(sc.feet)})</td><td class="n">${money(sc.amount)}</td></tr>`).join("")}
       ${s.payMethod==="card"&&r.cardFee?`<tr><td>Card fee (${s.cardFee}%)</td><td class="n">${money(r.cardFee)}</td></tr>`:""}
-      <tr class="grand"><td>Turnkey Total</td><td class="n">${money(r.grand)}</td></tr>
+      <tr class="grand"><td>Turnkey Total</td><td class="n"><span class="totcirc">${money(r.grand)}</span></td></tr>
       <tr><td>${s.depositPct}% Deposit</td><td class="n">${money(r.deposit)}</td></tr>
       <tr><td>Balance on completion</td><td class="n">${money(r.remaining)}</td></tr>
-    </table>`;
+    </table>
+    <p class="muted cardnote">Payment processing: a <b>3% fee</b> applies to all credit &amp; debit card payments and a <b>4% fee</b> applies to American Express. No fee for cash or check.</p>`;
     const diagramHTML = diagram ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">${showHeads?esc(opt.name)+" — ":""}Diagram</h3><img class="diagram" src="${diagram}"></div>` : "";
     const head = showHeads ? `<h2 class="opt-title">${esc(opt.name)} — ${money(r.grand)}</h2>` : "";
     optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimer}</section>${diagramHTML}`;
@@ -3922,6 +3992,9 @@ async function buildPrintDoc(){
     .tot td{padding:5px 8px;border-bottom:1px solid #e3e8ee}
     .tot td.n{text-align:right;font-family:'Courier New',monospace;font-weight:700}
     .grand td{background:#1b2530;color:#fff;font-size:15px;border:0}
+    .grand td.n{padding:8px 10px}
+    .totcirc{display:inline-block;border:2.5px solid #c8202a;border-radius:50%;padding:5px 15px;line-height:1;font-weight:700}
+    .cardnote{width:320px;margin:6px 0 0 auto;font-size:11px;line-height:1.45}
     /* max-height leaves room for the "Diagram" heading so a tall (portrait) snapshot +
        heading still fit one printable page — at 9in WKWebView's print path spilled a blank page */
     .diagram{border:1px solid #d9e0e7;border-radius:6px;max-width:100%;max-height:8.5in;display:block;margin:6px auto 0}
@@ -3965,11 +4038,13 @@ async function buildPrintDoc(){
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Estimate ${esc(m.name||"")}</title><style>${css}</style></head><body>
     <div class="head">
       <div><h1>Prime Seamless Gutters &amp; Roofing</h1><div class="muted">San Antonio · Austin &nbsp;|&nbsp; (210) 246-3931 &nbsp;|&nbsp; info@primeseamless.com</div></div>
-      <div class="muted" style="text-align:right">Commercial / Residential Estimate<br>${esc(m.date||"")}<br>Quote good for 30 days</div>
+      <div class="muted" style="text-align:right">Commercial / Residential Estimate<br>${esc(fmtDate(m.date))}<br>Quote good for 30 days</div>
     </div>
     <table class="info"><tr><td><b>Name</b></td><td>${esc(m.name)}</td><td><b>Phone</b></td><td>${esc(m.phone)}</td></tr>
       <tr><td><b>Address</b></td><td>${esc(m.address)}</td><td><b>Cell</b></td><td>${esc(m.cell)}</td></tr>
-      <tr><td><b>E-mail</b></td><td>${esc(m.email)}</td><td><b>Gate code</b></td><td>${esc(m.gateCode)}</td></tr></table>
+      <tr><td><b>E-mail</b></td><td>${esc(m.email)}</td><td><b>Gate code</b></td><td>${esc(m.gateCode)}</td></tr>
+      <tr><td><b>Salesperson</b></td><td>${esc(m.salesperson)}</td><td><b>Salesperson phone</b></td><td>${esc(m.salespersonPhone)}</td></tr>
+      <tr><td><b>Date</b></td><td>${esc(fmtDate(m.date))}</td><td></td><td></td></tr></table>
     ${optionSections}
     ${colorChartHTML}
     ${photosHTML}
