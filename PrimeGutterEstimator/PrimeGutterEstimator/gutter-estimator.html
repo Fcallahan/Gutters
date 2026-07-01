@@ -241,6 +241,9 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .photo-card canvas{display:block;cursor:crosshair;touch-action:none}
 .photo-card .pc-bar{display:flex;gap:6px;align-items:center;padding:7px 9px;border-top:1px solid var(--line);background:#f6f8fa}
 .photo-empty{color:#33455a;text-align:center;margin:auto;font-weight:700}
+.title-card{outline:3px solid #c8202a}
+.title-card .title-preview{display:block;width:520px;max-width:60vw;height:auto}
+.title-card .title-tag{background:#c8202a;color:#fff;font-size:11px;font-weight:800;letter-spacing:.4px;padding:5px 9px}
 
 /* modal */
 #modalWrap{position:fixed;inset:0;background:rgba(15,22,30,.55);z-index:50;display:none;align-items:center;justify-content:center;padding:20px}
@@ -287,6 +290,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
     <button class="tb-btn primary" id="btnPrint">Print / PDF</button>
     <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
     <input type="file" id="photoInput" accept="image/*" multiple style="display:none">
+    <input type="file" id="titleInput" accept="image/*" style="display:none">
   </div>
 
   <div id="optionsBar"></div>
@@ -358,6 +362,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <span style="color:#9fb0c0;font-size:12px" id="photoHint">Import photos and mark up the runs.</span>
           <div class="tb-spacer" style="flex:1"></div>
           <button class="tb-btn" id="btnAddPhoto">+ Add photos</button>
+          <button class="tb-btn" id="btnTitleImg" title="Cover photo shown on the first page of the estimate">+ Title image</button>
           <div class="ob-grp" id="photoTools" style="display:flex;gap:4px;align-items:center">
             <button class="tb-btn ptool" data-ptool="select">⬚ Select</button>
             <button class="tb-btn ptool" data-ptool="pen">✎ Pen</button>
@@ -476,7 +481,7 @@ const BOX_COLORS = ["#ffffff","#fde2e2","#ffe9cc","#fff7cc","#e2f4dd","#d9ecf7",
 
 function defaultProject(){
   return {
-    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:""},
+    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:"",warrantyYears:"10",titleImage:""},
     settings:{
       gutterType:"6K",            // default gutter style id (see GUTTER_STYLES)
       defaultDownspoutSize:"3x4", // default downspout size id (auto-follows the gutter style)
@@ -555,7 +560,7 @@ const PRICE_KEYS = [
   ...DS_STYLES.map(d=>d.priceKey),
   "diverters",
   ...DS_STYLES.map(d=>d.outletKey),
-  "valley","splash","leaf6","leaf5","strip","box","bay",
+  "valley","splash","splashPlastic","splashConcrete","leaf6","leaf5","strip","box","bay",
   ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>g.miterKey),
   ...DS_STYLES.map(d=>d.elbowKey),
   ...DS_STYLES.map(d=>d.offsetKey),
@@ -599,6 +604,9 @@ function ensurePrices(){
   const p = P.settings.prices = P.settings.prices || {};
   // seed master per-style $/ft prices
   for(const k in STYLE_DEFAULTS){ if(p[k]==null) p[k]=STYLE_DEFAULTS[k]; }
+  // splash blocks: plastic $10, concrete $30 (hand-editable)
+  if(p.splashPlastic==null) p.splashPlastic=10;
+  if(p.splashConcrete==null) p.splashConcrete=30;
   // anything not seeded yet defaults to 0
   PRICE_KEYS.forEach(k=>{ if(p[k]==null) p[k]=0; });
   // derive all style-related component prices from the style $/ft
@@ -777,11 +785,13 @@ function parseDS(str){
   str=(str||"").trim();
   let comps="", feet=0;
   if(str){
-    const parts=str.split(/\s+/);
+    // "TL" = "to lower" note only (drains to a lower roof); strip it so it never
+    // interferes with component/footage parsing or counts as a component.
+    const parts=str.split(/\s+/).filter(t=>t.toUpperCase()!=="TL");
     if(parts.length===1){
       if(/^[0-9]+(\.[0-9]+)?$/.test(parts[0])) feet=parseFloat(parts[0]);
       else comps=parts[0];
-    }else{
+    }else if(parts.length>1){
       comps=parts[0];
       const last=parts[parts.length-1];
       if(/^[0-9]+(\.[0-9]+)?$/.test(last)) feet=parseFloat(last);
@@ -876,7 +886,8 @@ function compute(){
   ensurePrices();
   const s=P.settings;
   const q={diverters:+s.diverters||0, valley:0,
-    splash:+s.splashBlocks||0, leaf6:+s.leafGuard6||0, leaf5:+s.leafGuard5||0,
+    splash:+s.splashBlocks||0, splashPlastic:0, splashConcrete:0,
+    leaf6:+s.leafGuard6||0, leaf5:+s.leafGuard5||0,
     strip:0,box:0,bay:0};
   GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; if(g.miterKey) q[g.miterKey]=0; });
   DS_STYLES.forEach(d=>{ q[d.priceKey]=0; q[d.outletKey]=0; q[d.elbowKey]=0; q[d.offsetKey]=0; });
@@ -913,6 +924,8 @@ function compute(){
       q[ds.elbowKey]+=d.elbows; q[ds.offsetKey]+=d.offsets; q[ds.outletKey]+=d.outlets;
     } else if(o.t==="valley"){
       q.valley++;
+    } else if(o.t==="splash"){
+      if(o.material==="concrete") q.splashConcrete++; else q.splashPlastic++;
     } else if(o.t==="custom"){
       const prod=(s.customProducts||[]).find(x=>x.id===o.productId);
       const mode=productMode(prod);
@@ -975,10 +988,11 @@ function compute(){
   const itemizedSub = Object.values(amt).reduce((a,b)=>a+b,0);
 
   const leafAmount = q.leaf6*pr.leaf6 + q.leaf5*pr.leaf5;
+  const splashAmount = q.splashPlastic*(+pr.splashPlastic||0) + q.splashConcrete*(+pr.splashConcrete||0);
   let turnkey;
   if(s.pricingMode==="flat"){
     turnkey = gutterFootage*(+s.flatGutterRate||0) + dsFootage*(+s.flatDownspoutRate||0)
-              + leafAmount + customTotal + addOns + (+s.miscDemoLabor||0);
+              + leafAmount + splashAmount + customTotal + addOns + (+s.miscDemoLabor||0);
   }else{
     turnkey = itemizedSub + customTotal + addOns + (+s.miscDemoLabor||0);
   }
@@ -988,7 +1002,7 @@ function compute(){
   const deposit = grand*(+s.depositPct||0)/100;
   const remaining = grand - deposit;
 
-  return {q,amt,corners,outlets,gutterFootage,dsFootage,itemizedSub,leafAmount,
+  return {q,amt,corners,outlets,gutterFootage,dsFootage,itemizedSub,leafAmount,splashAmount,
           customRows,customTotal,customFootage,
           demoFeet,demoAmount,screenRows,screenTotal,
           turnkey,cardFee,grand,deposit,remaining};
@@ -1022,7 +1036,7 @@ function r1(n){ return Math.round((+n||0)*10)/10; }
 function materialList(){
   const r=compute(); const s=P.settings;
   const gut={}, gutParts={}, ds={}, dsParts={};
-  let valley=0;
+  let valley=0, splashP=0, splashC=0;
   const add=(map,key,base)=>{ if(!map[key]) map[key]=Object.assign({qty:0},base); return map[key]; };
   for(const o of P.objects){
     if(o.t==="gutter"){
@@ -1055,6 +1069,7 @@ function materialList(){
       if(d.o4) add(dsParts,'Offset 4" '+szl+"|"+k,{item:'Offset 4" '+szl,unit:"ea",color:colorName,brand}).qty+=d.o4;
       if(d.o6) add(dsParts,'Offset 6" '+szl+"|"+k,{item:'Offset 6" '+szl,unit:"ea",color:colorName,brand}).qty+=d.o6;
     } else if(o.t==="valley"){ valley++; }
+    else if(o.t==="splash"){ if(o.material==="concrete") splashC++; else splashP++; }
   }
   const gb=s.gutterBrand||"Spectra";
   const out=[];
@@ -1066,6 +1081,8 @@ function materialList(){
   if(valley) out.push({item:"Valley shield",qty:valley,unit:"ea",color:""});
   if(+s.diverters) out.push({item:"Diverters",qty:+s.diverters,unit:"ea",color:s.gutterColor,brand:gb});
   if(+s.splashBlocks) out.push({item:"Splash blocks",qty:+s.splashBlocks,unit:"ea",color:""});
+  if(splashP) out.push({item:"Splash block — plastic",qty:splashP,unit:"ea",color:""});
+  if(splashC) out.push({item:"Splash block — concrete",qty:splashC,unit:"ea",color:""});
   if(+s.leafGuard6) out.push({item:'Leaf guard 6"',qty:+s.leafGuard6,unit:"ft",color:s.gutterColor,brand:gb});
   if(+s.leafGuard5) out.push({item:'Leaf guard 5"',qty:+s.leafGuard5,unit:"ft",color:s.gutterColor,brand:gb});
   (r.customRows||[]).forEach(c=>out.push({item:c.name+" (custom)",qty:r1(c.feet),unit:"ft",color:c.color}));
@@ -1126,7 +1143,7 @@ draw = function(){
   drawGrid();
 
   // ordered draw: highlights first (under), then gutters, arrows, ds, valley, stamps, text on top
-  const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,stamp:5,text:6};
+  const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,splash:4,stamp:5,text:6};
   const objs=[...P.objects].sort((a,b)=>(order[a.t]||9)-(order[b.t]||9));
   for(const o of objs) drawObject(o);
 
@@ -1186,6 +1203,10 @@ function chipPx(base){
   const s = base*(P.settings.labelSize||1)*cam.scale;
   return Math.max(2, Math.min(80, s));
 }
+
+/* downspout marker (outlet ring + square) scale factor — tracks the measurement-label
+   size so the circle/square grow and shrink with zoom exactly like the numbers do */
+function markerK(){ return chipPx(11)/11; }
 
 function drawGrid(){
   const step=GRID*cam.scale;
@@ -1253,6 +1274,7 @@ function drawObject(o){
   if(o.t==="custom") return drawCustom(o);
   if(o.t==="ds")     return drawDS(o);
   if(o.t==="valley") return drawValley(o);
+  if(o.t==="splash") return drawSplash(o);
   if(o.t==="text")   return drawText(o);
   if(o.t==="arrow")  return drawArrow(o);
   if(o.t==="stamp")  return drawStamp(o);
@@ -1370,30 +1392,45 @@ function drawDS(o){
   const s=worldToScreen(o);
   const col=colorHex(o.color||P.settings.downspoutColor,effBrand(o));
   const sz=dsSizeFor(o);
+  const k=markerK();                 // marker scales with zoom, same as the labels
   ctx.save();
   // outlet ring
-  ctx.beginPath();ctx.arc(s.x,s.y,9,0,7);ctx.fillStyle="#fff";ctx.fill();
-  ctx.lineWidth=2.5;ctx.strokeStyle="#1b2530";ctx.stroke();
+  ctx.beginPath();ctx.arc(s.x,s.y,9*k,0,7);ctx.fillStyle="#fff";ctx.fill();
+  ctx.lineWidth=Math.max(1,2.5*k);ctx.strokeStyle="#1b2530";ctx.stroke();
   // downspout square (colored)
-  roundRect(ctx,s.x-6,s.y-6,12,12,2.5);ctx.fillStyle=col;ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle="#1b2530";ctx.stroke();
-  if(sel.has(o.id)){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=2;ctx.beginPath();ctx.arc(s.x,s.y,13,0,7);ctx.stroke(); }
+  roundRect(ctx,s.x-6*k,s.y-6*k,12*k,12*k,2.5*k);ctx.fillStyle=col;ctx.fill();ctx.lineWidth=Math.max(0.75,1.5*k);ctx.strokeStyle="#1b2530";ctx.stroke();
+  if(sel.has(o.id)){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=Math.max(1,2*k);ctx.beginPath();ctx.arc(s.x,s.y,13*k,0,7);ctx.stroke(); }
   ctx.restore();
   // notation chip below
   const d=parseDS(o.notation);
   const label=(o.notation&&o.notation.trim())?o.notation.trim().toUpperCase():"(1 outlet)";
   const _dsz=chipPx(11);
-  const box=segChip(o,"note",s.x,s.y+20*cam.scale,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
+  const box=segChip(o,"note",s.x,s.y+20*k,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
   addLabelBox("dsnote",o.id,box.x,box.y,box.w,box.h);
   // size tag
   const _stz=chipPx(9);
-  chip(sz,s.x,s.y-20*cam.scale,{size:_stz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_stz*0.42),r:4});
-  addLabelBox("obj",o.id,s.x-9,s.y-9,18,18);
+  chip(sz,s.x,s.y-20*k,{size:_stz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_stz*0.42),r:4});
+  addLabelBox("obj",o.id,s.x-9*k,s.y-9*k,18*k,18*k);
 }
 
 function drawValley(o){
   const s=worldToScreen(o);
   const _vsz=chipPx(13);
   const box=chip("VS",s.x,s.y,{size:_vsz,pad:Math.max(2,_vsz*0.42),bold:true,bg:getCSS("--orange"),fg:"#fff",bc:"#c96f00",bw:1.5,r:5});
+  if(sel.has(o.id)){ ctx.save();ctx.strokeStyle="#2b7fd0";ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.strokeRect(box.x-3,box.y-3,box.w+6,box.h+6);ctx.restore(); }
+  addLabelBox("obj",o.id,box.x,box.y,box.w,box.h);
+}
+
+function drawSplash(o){
+  const s=worldToScreen(o);
+  const k=markerK();                          // scales with zoom, like the other labels
+  const concrete=(o.material==="concrete");
+  const bg=concrete?"#6b7280":"#2f6fd0";      // concrete = gray, plastic = blue
+  const _sz=chipPx(12);
+  const box=chip("SB",s.x,s.y,{size:_sz,pad:Math.max(2,_sz*0.42),bold:true,bg,fg:"#fff",bc:bg,bw:1.5,r:5});
+  // material tag below
+  const _tz=chipPx(8);
+  chip(concrete?"CONCRETE":"PLASTIC",s.x,s.y+16*k,{size:_tz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_tz*0.42),r:4});
   if(sel.has(o.id)){ ctx.save();ctx.strokeStyle="#2b7fd0";ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.strokeRect(box.x-3,box.y-3,box.w+6,box.h+6);ctx.restore(); }
   addLabelBox("obj",o.id,box.x,box.y,box.w,box.h);
 }
@@ -1631,7 +1668,7 @@ function objBounds(o){
   }
   if(o.t==="arrow"){ const x=Math.min(o.x1,o.x2),y=Math.min(o.y1,o.y2);return {x,y,w:Math.abs(o.x2-o.x1),h:Math.abs(o.y2-o.y1)};}
   if(o.t==="text"){ return {x:o.x,y:o.y,w:o.w,h:o.h}; }
-  if(o.t==="ds"||o.t==="valley"||o.t==="stamp"){ return {x:o.x-30,y:o.y-20,w:60,h:50}; }
+  if(o.t==="ds"||o.t==="valley"||o.t==="splash"||o.t==="stamp"){ return {x:o.x-30,y:o.y-20,w:60,h:50}; }
   return {x:o.x||0,y:o.y||0,w:20,h:20};
 }
 
@@ -1674,6 +1711,7 @@ const ICON={
   custom:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 18L18 4l2 2L6 20H4v-2z"/><path d="M14 6l4 4"/></svg>',
   demo:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M5 4l14 16"/></svg>',
   screen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="M7 6v12M11 6v12M15 6v12M3 10h18M3 14h18"/></svg>',
+  splash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l4-8h8l4 8z"/><path d="M2 20h20"/></svg>',
   add:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>'
 };
 // base tools. behavior = which interaction code runs; label shows on the button.
@@ -1684,6 +1722,7 @@ const BASE_TOOLS=[
   {id:"gutter",behavior:"gutter",icon:"gutter",name:'Gutter — pick style above',key:"G",lbl:'GUT'},
   {id:"ds",behavior:"ds",icon:"ds",name:'Downspout — pick size above',key:"D",lbl:'DS'},
   {id:"valley",behavior:"valley",icon:"valley",name:"Valley shield (VS)",key:"S"},
+  {id:"splash",behavior:"splash",icon:"splash",name:"Splash block — plastic or concrete",key:"B",lbl:"SPL"},
   {id:"demo",behavior:"demo",icon:"demo",name:"Demo gutter — drag to mark for removal",key:"X",lbl:"DEMO"},
   {id:"screen",behavior:"screen",icon:"screen",name:"Gutter screen — drag over runs",key:"N",lbl:"SCRN"},
   {id:"_div"},
@@ -1702,7 +1741,7 @@ function allTools(){
   const out=[];
   for(const t of BASE_TOOLS){
     out.push(t);
-    if(t.id==="valley"){ ct.forEach(c=>out.push(c)); out.push(addBtn); }
+    if(t.id==="splash"){ ct.forEach(c=>out.push(c)); out.push(addBtn); }
   }
   return out;
 }
@@ -1746,6 +1785,7 @@ function toolHint(t){
     gutter:"Drag to draw a run, lift to finish • start on an existing end (green ring) to add a corner • (mouse: click corners, then ✓ Finish)",
     ds:"Tap to drop a downspout • then type its run, e.g. \"AAA 20\" — 1 outlet is automatic • change its color any time via Select",
     valley:"Tap an inside corner to place a Valley Shield (counts as 2 ft each)",
+    splash:"Tap to drop a splash block • pick Plastic or Concrete above • change either any time via Select",
     custom:"Drag to draw the run, lift to finish • priced per foot • (mouse: click corners, then ✓ Finish)",
     text:"Drag to draw a text box, then type",
     arrow:"Drag to draw an arrow",
@@ -1787,6 +1827,14 @@ function buildOptbar(){
       + g('<label>Color</label><span class="swatch" id="opDsSw" style="background:'+colorHex(dsDrawColor||P.settings.downspoutColor,downspoutBrand())+'"></span><select id="opDsColor">'+colorOptions(dsDrawColor||P.settings.downspoutColor,downspoutBrand())+'</select>')
       + '<span class="mini" style="color:var(--text-soft)">Each spout can be recolored later via Select</span>'
       + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap</label>');
+  } else if(tool==="splash"){
+    ensurePrices();
+    const pr=P.settings.prices, mat=splashDrawMaterial;
+    h+='<span class="ob-title">SPLASH BLOCK</span>'+dv
+      + g('<label>Material</label><select id="opSplashMat">'
+          +'<option value="plastic"'+(mat==="plastic"?' selected':'')+'>Plastic — '+money(+pr.splashPlastic||0)+'</option>'
+          +'<option value="concrete"'+(mat==="concrete"?' selected':'')+'>Concrete — '+money(+pr.splashConcrete||0)+'</option></select>')
+      + '<span class="mini" style="color:var(--text-soft)">Tap to drop • each block can be switched later via Select</span>';
   } else if(tool==="custom"){
     const p=(P.settings.customProducts||[]).find(x=>x.id===activeCustom)||{name:"Custom",pricePerFoot:0,color:"#c8202a"};
     const sm=customStrokeMode();
@@ -1865,6 +1913,11 @@ function buildOptbar(){
         + g('<label>Color</label><input type="color" id="opSelStrokeColor" value="'+(one.color||"#34c759")+'" style="width:40px;height:28px;border:0;background:none">') + dv;
     } else if(one && one.t==="demo"){
       h+= g('<label>Color</label><input type="color" id="opSelStrokeColor" value="'+(one.color||"#ff3b30")+'" style="width:40px;height:28px;border:0;background:none">') + dv;
+    } else if(one && one.t==="splash"){
+      const mat=one.material==="concrete"?"concrete":"plastic";
+      h+= g('<label>Material</label><select id="opSelSplashMat">'
+          +'<option value="plastic"'+(mat==="plastic"?' selected':'')+'>Plastic — '+money(+P.settings.prices.splashPlastic||0)+'</option>'
+          +'<option value="concrete"'+(mat==="concrete"?' selected':'')+'>Concrete — '+money(+P.settings.prices.splashConcrete||0)+'</option></select>') + dv;
     } else {
       h+='<span class="mini" style="color:var(--text-soft)">'+(sel.size>1?sel.size+' selected':'Click to edit a measurement or note • drag to move')+'</span>' + dv;
     }
@@ -1909,6 +1962,8 @@ function wireOptbar(){
     buildOptbar(); refreshAll();
   };
   if(byId("opDsColor")) byId("opDsColor").onchange=e=>{ dsDrawColor=e.target.value; byId("opDsSw").style.background=colorHex(e.target.value,downspoutBrand()); };
+  if(byId("opSplashMat")) byId("opSplashMat").onchange=e=>{ splashDrawMaterial=e.target.value; };
+  if(byId("opSelSplashMat")) byId("opSelSplashMat").onchange=e=>{ const one=sel.size===1?objById([...sel][0]):null; if(one&&one.t==="splash"){ one.material=e.target.value; refreshAll(); } };
   if(byId("opFont")) byId("opFont").onchange=e=>textFont=e.target.value;
   if(byId("opTSize")) byId("opTSize").onchange=e=>textSize=+e.target.value;
   if(byId("opTFill")) byId("opTFill").onclick=()=>pickColor("Box fill color",textFill,c=>{textFill=c;byId("opTFillSw").style.background=c;});
@@ -1957,6 +2012,7 @@ function wireOptbar(){
 }
 /* current draw params */
 let gutterDrawSize=null, gutterDrawColor=null, dsDrawSize=null, dsDrawColor=null;
+let splashDrawMaterial="plastic";   // default splash-block material for the Splash tool
 let textFont="Arial", textSize=14, textFill="#ffffff", textColor="#1b2530";
 let arrowColor="#c8202a", arrowWidth=3;
 
@@ -2348,7 +2404,7 @@ function onDown(e){
     else { drawing.pts.push(snapW(w)); }
     draw(); return;
   }
-  if(tool==="ds"||tool==="valley"||tool==="stamp"){
+  if(tool==="ds"||tool==="valley"||tool==="stamp"||tool==="splash"){
     if(e.pointerType==="touch"){ pendingTap={tool, w:{x:cursorW.x,y:cursorW.y}, downPt:pt}; return; }
     placeTapObject(tool, cursorW); return;
   }
@@ -2371,6 +2427,9 @@ function placeTapObject(which, w){
   } else if(which==="valley"){
     const o={t:"valley",id:uid(),x:w.x,y:w.y};
     P.objects.push(o); sel=new Set([o.id]); refreshAll();
+  } else if(which==="splash"){
+    const o={t:"splash",id:uid(),x:w.x,y:w.y,material:splashDrawMaterial};
+    P.objects.push(o); sel=new Set([o.id]); refreshAll();
   } else if(which==="stamp"){
     const o={t:"stamp",id:uid(),x:w.x,y:w.y,text:activeStamp.text,color:activeStamp.color,font:P.settings.defaultFont};
     P.objects.push(o); sel=new Set([o.id]); refreshAll();
@@ -2390,7 +2449,7 @@ function onMove(e){
   }
   if(erasing){ cursorW=w; eraseStrokesAt(w, eraserRadiusWorld(), erasing); draw(); return; }
   // hover cursor for drawing tools
-  if(["gutter","custom","ds","valley","stamp","arrow","text","hl"].includes(tool)){
+  if(["gutter","custom","ds","valley","splash","stamp","arrow","text","hl"].includes(tool)){
     let cw=snapW(w);
     if(drawing && (drawing.t==="gutter"||drawing.t==="custom") && drawing.pts.length>0){
       cw=snapAngleW(cw, drawing.pts[drawing.pts.length-1]);
@@ -2447,7 +2506,7 @@ function onMove(e){
     draw(); return;
   }
   if(tool==="gutter"&&drawing){ draw(); }
-  if(["gutter","custom","ds","valley","stamp"].includes(tool)) draw(); // show snapped cursor
+  if(["gutter","custom","ds","valley","splash","stamp"].includes(tool)) draw(); // show snapped cursor
 }
 
 function onUp(e){
@@ -2795,7 +2854,7 @@ function openEditorFor(hit){
     field.type="text"; field.inputMode="none"; field.value=o.notation||"";
     field.placeholder="AAA 20"; field.style.width="130px"; field.style.textTransform="uppercase";
     field.readOnly=true;
-    hintTxt='A/B=elbows · 2/4/6=offset size · space + feet';
+    hintTxt='A/B=elbows · 2/4/6=offset size · space + feet · TL=to lower (goes last)';
     // custom keypad built after FE is appended
   } else if(hit.kind==="stamp"){
     field=document.createElement("input");
@@ -2854,7 +2913,7 @@ function openEditorFor(hit){
     // right: A, B, Done stacked
     const kpAB=document.createElement("div");
     kpAB.style.cssText="display:flex;flex-direction:column;gap:5px";
-    [["A","#1e3a52"],["B","#1e3a52"],["✓","#1f9d55"]].forEach(([k,bg])=>{
+    [["A","#1e3a52"],["B","#1e3a52"],["TL","#1e3a52"],["✓","#1f9d55"]].forEach(([k,bg])=>{
       const btn=document.createElement("button");
       btn.textContent=k;
       btn.style.cssText="padding:12px 14px;border-radius:7px;border:1px solid #3a4d61;"
@@ -2862,6 +2921,7 @@ function openEditorFor(hit){
       btn.onpointerdown=(ev)=>{
         ev.preventDefault();
         if(k==="✓"){ commitEditor(); }
+        else if(k==="TL"){ field.value=(field.value.replace(/\s*TL\s*$/i,"").trim()+" TL").trim().toUpperCase(); } // "to lower" — goes last, e.g. AAA 10 TL
         else { field.value=(field.value+k).toUpperCase(); }
       };
       kpAB.appendChild(btn);
@@ -2926,7 +2986,8 @@ const LINES = [
   {key:"diverters",label:"DIVERTERS",        kind:"ea", src:"diverters"},
   ...DS_STYLES.map(d=>({key:d.outletKey,    label:'OUTLETS '+d.short,       kind:"ea", src:"auto"})),
   {key:"valley",   label:"VALLEY SHIELD",    kind:"ea", src:"auto", tag:"VS"},
-  {key:"splash",   label:"SPLASH BLOCKS",    kind:"ea", src:"splashBlocks"},
+  {key:"splashPlastic",  label:"SPLASH BLOCK — PLASTIC",  kind:"ea", src:"auto"},
+  {key:"splashConcrete", label:"SPLASH BLOCK — CONCRETE", kind:"ea", src:"auto"},
   {key:"leaf6",    label:'LEAF GUARD 6"',    kind:"ft", src:"leafGuard6"},
   {key:"leaf5",    label:'LEAF GUARD 5"',    kind:"ft", src:"leafGuard5"},
   {key:"strip",    label:"STRIP MITER",      kind:"ea", src:"auto"},
@@ -2998,6 +3059,7 @@ function buildEstimatePane(){
     h+=`<div class="totline foot"><span>Gutter @ ${money(P.settings.flatGutterRate)}/ft</span><span class="v">${money(r.gutterFootage*(+P.settings.flatGutterRate||0))}</span></div>`;
     h+=`<div class="totline foot"><span>Downspout @ ${money(P.settings.flatDownspoutRate)}/ft</span><span class="v">${money(r.dsFootage*(+P.settings.flatDownspoutRate||0))}</span></div>`;
     if(r.leafAmount>0) h+=`<div class="totline foot"><span>Leaf guard</span><span class="v">${money(r.leafAmount)}</span></div>`;
+    if(r.splashAmount>0) h+=`<div class="totline foot"><span>Splash blocks</span><span class="v">${money(r.splashAmount)}</span></div>`;
   } else {
     h+=`<div class="totline foot"><span>Itemized subtotal</span><span class="v">${money(r.itemizedSub)}</span></div>`;
   }
@@ -3028,6 +3090,15 @@ function fld(label,id,val,type,attrs){
   return `<div class="fld"><label>${label}</label><input id="${id}" type="${type}" value="${esc(val)}" ${attrs||""}></div>`;
 }
 
+// Format a phone number as (111) 111-1111 as the user types
+function fmtPhone(v){
+  const d=(v||"").replace(/\D/g,"").slice(0,10);
+  if(d.length===0) return "";
+  if(d.length<4) return "("+d;
+  if(d.length<7) return "("+d.slice(0,3)+") "+d.slice(3);
+  return "("+d.slice(0,3)+") "+d.slice(3,6)+"-"+d.slice(6);
+}
+
 function buildJobPane(){
   const m=P.meta;
   let h="";
@@ -3035,9 +3106,10 @@ function buildJobPane(){
   h+=fld("Name","jiName",m.name);
   h+=fld("Address","jiAddr",m.address);
   h+=`<div class="row2">${fld("Gate code","jiGate",m.gateCode)}${fld("Date","jiDate",m.date,"date")}</div>`;
-  h+=`<div class="row2">${fld("Phone","jiPhone",m.phone,"tel")}${fld("Cell","jiCell",m.cell,"tel")}</div>`;
+  h+=`<div class="row2">${fld("Phone","jiPhone",fmtPhone(m.phone),"tel")}${fld("Cell","jiCell",fmtPhone(m.cell),"tel")}</div>`;
   h+=fld("E-mail","jiEmail",m.email,"email");
-  h+=`<div class="row2">${fld("Salesperson","jiSales",m.salesperson)}${fld("Salesperson phone","jiSalesPhone",m.salespersonPhone,"tel")}</div>`;
+  h+=`<div class="row2">${fld("Salesperson","jiSales",m.salesperson)}${fld("Salesperson phone","jiSalesPhone",fmtPhone(m.salespersonPhone),"tel")}</div>`;
+  h+=`<div class="row2">${fld("Workmanship warranty (years)","jiWarranty",m.warrantyYears,"number",'min="0" step="1" inputmode="numeric"')}<div class="fld"></div></div>`;
   const brandOpts=(sel)=>BRANDS.map(b=>'<option value="'+b+'"'+(b===sel?' selected':'')+'>'+b+'</option>').join("");
   h+=`<div class="sec-h">Colors</div>`;
   h+=`<div class="fld"><label>Gutter brand</label><select id="jiGutBrand" aria-label="Gutter brand">${brandOpts(gutterBrand())}</select></div>`;
@@ -3049,7 +3121,10 @@ function buildJobPane(){
 
   const bind=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ P.meta[key]=e.value; }; };
   bind("jiName","name");bind("jiAddr","address");bind("jiGate","gateCode");bind("jiDate","date");
-  bind("jiPhone","phone");bind("jiCell","cell");bind("jiEmail","email");bind("jiSales","salesperson");bind("jiSalesPhone","salespersonPhone");
+  bind("jiEmail","email");bind("jiSales","salesperson");bind("jiWarranty","warrantyYears");
+  // phone fields: reformat live as (111) 111-1111 and store the formatted string
+  const bindPhone=(id,key)=>{ const e=byId(id); if(!e) return; e.oninput=()=>{ const p=e.selectionStart, before=e.value; e.value=fmtPhone(e.value); P.meta[key]=e.value; if(p===before.length) e.setSelectionRange(e.value.length,e.value.length); }; e.onchange=()=>{ e.value=fmtPhone(e.value); P.meta[key]=e.value; }; };
+  bindPhone("jiPhone","phone");bindPhone("jiCell","cell");bindPhone("jiSalesPhone","salespersonPhone");
   // changing a brand: keep the color if it exists in the new brand, else fall back to that brand's first color
   byId("jiGutBrand").onchange=e=>{ P.settings.gutterBrand=e.target.value; const list=brandColorList(e.target.value); if(!list.some(c=>c.n===P.settings.gutterColor)) P.settings.gutterColor=list[0].n; buildJobPane(); refreshAll(); };
   byId("jiDsBrand").onchange=e=>{ P.settings.downspoutBrand=e.target.value; const list=brandColorList(e.target.value); if(!list.some(c=>c.n===P.settings.downspoutColor)) P.settings.downspoutColor=list[0].n; buildJobPane(); refreshAll(); };
@@ -3474,6 +3549,16 @@ byId("photoInput").onchange=e=>{
   e.target.value="";
 };
 
+byId("btnTitleImg").onclick=()=>byId("titleInput").click();
+byId("titleInput").onchange=e=>{
+  const f=e.target.files[0]; if(!f){ return; }
+  const rd=new FileReader();
+  rd.onload=()=>{ P.meta.titleImage=rd.result; renderPhotos(); scheduleSave&&scheduleSave(); };
+  rd.readAsDataURL(f);
+  e.target.value="";
+};
+function removeTitleImage(){ P.meta.titleImage=""; renderPhotos(); scheduleSave&&scheduleSave(); }
+
 function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
   for(const st of ph.strokes){
     const type=st.type||"pen";
@@ -3512,8 +3597,22 @@ function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
 
 function renderPhotos(){
   const scroll=byId("photoScroll");
-  if(!P.photos.length){ scroll.innerHTML=`<div class="photo-empty">No photos yet — click “Add photos” to import.</div>`; return; }
   scroll.innerHTML="";
+  if(P.meta.titleImage){
+    const tc=document.createElement("div"); tc.className="photo-card title-card";
+    tc.innerHTML=`<div class="title-tag">TITLE IMAGE — first page of estimate</div>
+      <img class="title-preview" src="${P.meta.titleImage}">
+      <div class="pc-bar"><span style="flex:1;font-size:11px;color:#33455a;font-weight:700">Cover photo</span>
+        <button class="btn-sm" data-titlechg>Replace</button>
+        <button class="btn-sm danger" data-titledel>Remove</button></div>`;
+    scroll.appendChild(tc);
+    tc.querySelector("[data-titlechg]").onclick=()=>byId("titleInput").click();
+    tc.querySelector("[data-titledel]").onclick=removeTitleImage;
+  }
+  if(!P.photos.length){
+    if(!P.meta.titleImage) scroll.innerHTML=`<div class="photo-empty">No photos yet — click “Add photos” to import.</div>`;
+    return;
+  }
   P.photos.forEach((ph,idx)=>{
     if(!ph.strokes) ph.strokes=[];
     if(!ph._view) ph._view={s:1,x:0,y:0};
@@ -3941,7 +4040,7 @@ async function buildPrintDoc(){
     const colorBlock=`<div class="colorline"><b>Gutter color:</b> ${esc(gBrand)} ${esc(s.gutterColor)} &nbsp;&nbsp; <b>Downspout color:</b> ${esc(dBrand)} ${esc(s.downspoutColor)}</div>`;
     const mats=materialList();
     const matRows=mats.map(x=>{ const sw=`<span class="msw" style="background:${swatchHex(x.color,x.brand)}"></span>`; const name=x.color?(/^#/.test(x.color)?"":esc(x.color)):""; const colTxt=x.color?((x.brand?esc(x.brand)+" ":"")+name):"—"; return `<tr><td>${esc(x.item)}</td><td class="n">${x.qty} ${x.unit}</td><td>${x.color?sw:""}${colTxt}</td></tr>`; }).join("");
-    const materialHTML = mats.length ? `<h3 class="sec">Material List</h3><table class="mat"><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th>Color</th></tr></thead><tbody>${matRows}</tbody></table>` : "";
+    const materialHTML = mats.length ? `<div class="mat-list avoid"><h3 class="sec">Material List</h3><table class="mat"><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th>Color</th></tr></thead><tbody>${matRows}</tbody></table></div>` : "";
     const totalsTable=`<table class="tot avoid">
       <tr><td>Total gutter footage</td><td class="n">${ftStr(r.gutterFootage)}</td></tr>
       <tr><td>Downspout footage</td><td class="n">${ftStr(r.dsFootage)}</td></tr>
@@ -3977,12 +4076,22 @@ async function buildPrintDoc(){
   let photosHTML="";
   if(photos.length){ photosHTML=`<h3 class="sec photo-head">Job Photos</h3>`; for(let i=0;i<photos.length;i+=4){ const cells=photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join(""); photosHTML+=`<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`; } }
   const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
+  const titleImgHTML = m.titleImage ? `<div class="title-hero"><img src="${m.titleImage}"></div>` : "";
+
+  const wYears = String(m.warrantyYears||"").trim();
+  const warrantyHTML = wYears ? `<div class="warranty">
+    <h3 class="sec">Workmanship Warranty</h3>
+    <p>Prime Seamless Gutters &amp; Roofing warrants the workmanship of this installation for <b>${esc(wYears)} year${wYears==="1"?"":"s"}</b> from the date of installation. This warranty covers defects in our workmanship and improper installation, including but not limited to: gutters holding more than 1/2&quot; of water, leaking corners/miters, leaking end caps, gutters coming loose due to improper fastening, and downspouts coming loose due to improper fastening. Any such issues will be repaired at no charge to the customer.</p>
+    <p>This warranty does <b>not</b> cover damage from acts of God (storms, hail, falling limbs, etc.) or accidental/manual damage — for example, backing a vehicle into a gutter or damage sustained during routine maintenance. Normal wear, misuse, and alterations by others are also excluded.</p>
+  </div>` : "";
 
   const css=`*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
     body{font-family:Arial,Helvetica,sans-serif;color:#1b2530;margin:0;padding:26px}
     h1{color:#c8202a;font-size:22px;margin:0}
     .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #c8202a;padding-bottom:8px;margin-bottom:14px}
     .muted{color:#5b6b7a;font-size:12px}
+    .warranty{break-inside:avoid;page-break-inside:avoid;margin-top:14px}
+    .warranty p{font-size:12px;line-height:1.5;color:#2a3846;margin:6px 0}
     table{border-collapse:collapse;width:100%;font-size:12.5px}
     .info td{padding:3px 6px;border:1px solid #d9e0e7}
     .ws th{background:#1b2530;color:#fff;text-align:left;padding:6px 8px;font-size:11px}
@@ -4030,6 +4139,9 @@ async function buildPrintDoc(){
     /* hide the on-screen Print button by default so the print formatter (incl. WKWebView,
        which doesn't always honor @media print) never paginates it onto a trailing blank page */
     .opt-title{color:#1b2530;font-size:17px;margin:18px 0 8px;padding:7px 10px;background:#eef2f6;border-left:5px solid #c8202a;border-radius:4px}
+    .title-hero{margin:14px 0 4px;break-inside:avoid;page-break-inside:avoid;text-align:center}
+    .title-hero img{max-width:100%;max-height:520px;width:auto;border-radius:8px;border:1px solid #d9e0e7}
+    .mat-list{margin-top:14px}
     .option-sec.optbreak{break-before:page;page-break-before:always}
     .noprint{display:none}
     @media screen{.noprint{display:inline-block}}
@@ -4037,16 +4149,18 @@ async function buildPrintDoc(){
 
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Estimate ${esc(m.name||"")}</title><style>${css}</style></head><body>
     <div class="head">
-      <div><h1>Prime Seamless Gutters &amp; Roofing</h1><div class="muted">San Antonio · Austin &nbsp;|&nbsp; (210) 246-3931 &nbsp;|&nbsp; info@primeseamless.com</div></div>
+      <div><h1>Prime Seamless Gutters &amp; Roofing</h1><div class="muted">San Antonio &nbsp;|&nbsp; (210) 246-3931 &nbsp;|&nbsp; info@primeseamless.com</div></div>
       <div class="muted" style="text-align:right">Commercial / Residential Estimate<br>${esc(fmtDate(m.date))}<br>Quote good for 30 days</div>
     </div>
-    <table class="info"><tr><td><b>Name</b></td><td>${esc(m.name)}</td><td><b>Phone</b></td><td>${esc(m.phone)}</td></tr>
-      <tr><td><b>Address</b></td><td>${esc(m.address)}</td><td><b>Cell</b></td><td>${esc(m.cell)}</td></tr>
+    <table class="info"><tr><td><b>Name</b></td><td>${esc(m.name)}</td><td><b>Phone</b></td><td>${esc(fmtPhone(m.phone))}</td></tr>
+      <tr><td><b>Address</b></td><td>${esc(m.address)}</td><td><b>Cell</b></td><td>${esc(fmtPhone(m.cell))}</td></tr>
       <tr><td><b>E-mail</b></td><td>${esc(m.email)}</td><td><b>Gate code</b></td><td>${esc(m.gateCode)}</td></tr>
-      <tr><td><b>Salesperson</b></td><td>${esc(m.salesperson)}</td><td><b>Salesperson phone</b></td><td>${esc(m.salespersonPhone)}</td></tr>
+      <tr><td><b>Salesperson</b></td><td>${esc(m.salesperson)}</td><td><b>Salesperson phone</b></td><td>${esc(fmtPhone(m.salespersonPhone))}</td></tr>
       <tr><td><b>Date</b></td><td>${esc(fmtDate(m.date))}</td><td></td><td></td></tr></table>
+    ${titleImgHTML}
     ${optionSections}
     ${colorChartHTML}
+    ${warrantyHTML}
     ${photosHTML}
     ${infoPageHTML}
     <button class="noprint" onclick="window.print()" style="padding:10px 16px;background:#c8202a;color:#fff;border:0;border-radius:8px;font-weight:700;cursor:pointer">Print this estimate</button>
@@ -4063,7 +4177,7 @@ byId("btnPrint").onclick=buildPrintDoc;
 /* ============================================================ */
 /* KEYBOARD                                                    */
 /* ============================================================ */
-const TOOLKEYS={v:"select",h:"hand",g:"gutter",d:"ds",s:"valley",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
+const TOOLKEYS={v:"select",h:"hand",g:"gutter",d:"ds",s:"valley",b:"splash",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
 window.addEventListener("keydown",e=>{
   const tag=(e.target.tagName||"").toLowerCase();
   const typing = tag==="input"||tag==="textarea"||tag==="select"||e.target.isContentEditable;
