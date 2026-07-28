@@ -242,7 +242,25 @@ input,select,textarea{font-family:inherit;font-size:13px}
 #floatEdit .fe-hint{font-size:9.5px;color:#fff;background:var(--prime);border-radius:4px;padding:2px 5px;margin-top:3px;display:inline-block;font-weight:700}
 
 /* photo page */
-#photoBar{height:46px;background:var(--ink);display:flex;align-items:center;gap:10px;padding:0 14px;color:#dce6ef;flex:0 0 auto}
+/* Wraps instead of overflowing: at iPad portrait width the fixed-height row pushed
+   the Text tool, colour picker, width slider and undo/redo off the right edge, where
+   they could not be reached at all. */
+#photoBar{
+  min-height:46px;background:var(--ink);display:flex;flex-wrap:wrap;align-items:center;
+  gap:8px;padding:7px 14px;color:#dce6ef;flex:0 0 auto;
+}
+#photoBar .tb-spacer{flex:1 1 0;min-width:0}
+#photoHint{flex:1 1 160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#photoWidth{width:72px}
+/* Narrow (iPad portrait, or landscape with the rail open): drop the decorative label,
+   the hint and the spacer so the controls pack tightly instead of pushing each other
+   onto extra rows. The tools themselves always stay on screen. */
+@media (max-width:1100px){
+  #photoHint,#photoBarTitle{display:none}
+  #photoBar .tb-spacer{display:none}
+  #photoBar .tb-btn{padding:6px 9px}
+  #photoWidth{width:58px}
+}
 #photoScroll{flex:1;overflow:auto;background:#9aa6b1;padding:18px;display:flex;flex-wrap:wrap;gap:18px;align-content:flex-start}
 .photo-card{background:#fff;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);overflow:hidden;position:relative}
 .photo-card canvas{display:block;cursor:crosshair;touch-action:none}
@@ -366,9 +384,9 @@ input,select,textarea{font-family:inherit;font-size:13px}
       <!-- PHOTO PAGE -->
       <div id="photoStage">
         <div id="photoBar">
-          <strong style="letter-spacing:.4px">PHOTO MARKUP</strong>
+          <strong id="photoBarTitle" style="letter-spacing:.4px">PHOTO MARKUP</strong>
           <span style="color:#9fb0c0;font-size:12px" id="photoHint">Import photos and mark up the runs.</span>
-          <div class="tb-spacer" style="flex:1"></div>
+          <div class="tb-spacer"></div>
           <button class="tb-btn" id="btnAddPhoto">+ Add photos</button>
           <button class="tb-btn" id="btnTitleImg" title="Cover photo shown on the first page of the estimate">+ Title image</button>
           <div class="ob-grp" id="photoTools" style="display:flex;gap:4px;align-items:center">
@@ -383,7 +401,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
           </div>
           <div class="ob-grp" style="display:flex;gap:6px;align-items:center">
             <input type="color" id="photoColor" value="#e01b24" style="width:34px;height:26px;border:0;background:none;cursor:pointer">
-            <input type="range" id="photoWidth" min="1" max="20" value="7" style="width:72px" title="Line / pen width">
+            <input type="range" id="photoWidth" min="1" max="20" value="7" title="Line / pen width">
           </div>
         </div>
         <div id="photoScroll">
@@ -569,7 +587,7 @@ const PRICE_KEYS = [
   ...DS_STYLES.map(d=>d.priceKey),
   "diverters",
   ...DS_STYLES.map(d=>d.outletKey),
-  "valley","splash","splashPlastic","splashConcrete","leaf6","leaf5","strip","box","bay",
+  "valley","splashPlastic","splashConcrete","leaf6","leaf5","strip","box","bay",
   ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>g.miterKey),
   ...DS_STYLES.map(d=>d.elbowKey),
   ...DS_STYLES.map(d=>d.offsetKey),
@@ -707,7 +725,10 @@ function roundStrokeFeet(raw, mode){
 }
 // behavior mode of a custom product: "line" (polyline, default) | "demo" | "screen"
 function productMode(prod){ return (prod && prod.mode) || "line"; }
-function productOf(id){ return (P.settings.customProducts||[]).find(p=>p.id===id) || null; }
+// Product ids come from uid() (a number) but reach us as strings from data-* attributes,
+// so every lookup compares loosely — a strict === here silently broke Edit and Delete.
+function sameProductId(a,b){ return a!=null && b!=null && String(a)===String(b); }
+function productOf(id){ return (P.settings.customProducts||[]).find(p=>sameProductId(p.id,id)) || null; }
 // is the active custom product a freehand-stroke product?
 function customStrokeMode(){ const p=productOf(activeCustom); const m=productMode(p); return m==="line"?null:m; }
 
@@ -900,7 +921,7 @@ function compute(){
   ensurePrices();
   const s=P.settings;
   const q={diverters:+s.diverters||0, valley:0,
-    splash:+s.splashBlocks||0, splashPlastic:0, splashConcrete:0,
+    splashPlastic:0, splashConcrete:0,
     leaf6:+s.leafGuard6||0, leaf5:+s.leafGuard5||0,
     strip:0,box:0,bay:0};
   GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; if(g.miterKey) q[g.miterKey]=0; });
@@ -941,7 +962,7 @@ function compute(){
     } else if(o.t==="splash"){
       if(o.material==="concrete") q.splashConcrete++; else q.splashPlastic++;
     } else if(o.t==="custom"){
-      const prod=(s.customProducts||[]).find(x=>x.id===o.productId);
+      const prod=productOf(o.productId);
       const mode=productMode(prod);
       const pid=o.productId||"_";
       const raw = (o.stroke||mode!=="line") ? pathFeetRaw(o.pts) : (o.lengths||[]).reduce((a,b)=>a+(+b||0),0);
@@ -1094,7 +1115,7 @@ function materialList(){
   Object.values(dsParts).forEach(v=>out.push({item:v.item,qty:v.qty,unit:v.unit,color:v.color,brand:v.brand}));
   if(valley) out.push({item:"Valley shield",qty:valley,unit:"ea",color:""});
   if(+s.diverters) out.push({item:"Diverters",qty:+s.diverters,unit:"ea",color:s.gutterColor,brand:gb});
-  if(+s.splashBlocks) out.push({item:"Splash blocks",qty:+s.splashBlocks,unit:"ea",color:""});
+  if(+s.splashBlocks) out.push({item:"Splash blocks (legacy count)",qty:+s.splashBlocks,unit:"ea",color:""});
   if(splashP) out.push({item:"Splash block — plastic",qty:splashP,unit:"ea",color:""});
   if(splashC) out.push({item:"Splash block — concrete",qty:splashC,unit:"ea",color:""});
   if(+s.leafGuard6) out.push({item:'Leaf guard 6"',qty:+s.leafGuard6,unit:"ft",color:s.gutterColor,brand:gb});
@@ -1375,7 +1396,7 @@ function drawCustom(o){
   }
   const pts=o.pts.map(worldToScreen);
   const isSel=sel.has(o.id);
-  const prod=(P.settings.customProducts||[]).find(x=>x.id===o.productId);
+  const prod=productOf(o.productId);
   const col=o.color||(prod&&prod.color)||"#7a4fd6";
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="round";
@@ -1610,7 +1631,7 @@ function drawInProgress(){
     const prod=productOf(activeCustom);
     ctx.restore(); paintStroke({pts:drawing.pts,color:(prod&&prod.color),width:20},(prod&&prod.color)||"#7a4fd6",customStrokeMode(),prod&&prod.name); ctx.save();
   } else if(drawing.t==="custom"){
-    const prod=(P.settings.customProducts||[]).find(x=>x.id===activeCustom);
+    const prod=productOf(activeCustom);
     const col=(prod&&prod.color)||"#7a4fd6";
     const pts=drawing.pts.map(worldToScreen);
     if(cursorW){ pts.push(worldToScreen(cursorW)); }
@@ -1850,7 +1871,7 @@ function buildOptbar(){
           +'<option value="concrete"'+(mat==="concrete"?' selected':'')+'>Concrete — '+money(+pr.splashConcrete||0)+'</option></select>')
       + '<span class="mini" style="color:var(--text-soft)">Tap to drop • each block can be switched later via Select</span>';
   } else if(tool==="custom"){
-    const p=(P.settings.customProducts||[]).find(x=>x.id===activeCustom)||{name:"Custom",pricePerFoot:0,color:"#c8202a"};
+    const p=productOf(activeCustom)||{name:"Custom",pricePerFoot:0,color:"#c8202a"};
     const sm=customStrokeMode();
     h+='<span class="ob-title">'+esc((p.name||"CUSTOM").toUpperCase())+'</span>'+dv
       + g('<label>'+money(p.pricePerFoot||0)+' / ft</label><button class="chip" id="opCustEdit">Edit product…</button>')
@@ -1966,7 +1987,7 @@ function wireOptbar(){
   if(byId("opFps")) byId("opFps").onchange=e=>{ P.settings.feetPerSquare=Math.max(0.5,+e.target.value||1); refreshAll(); };
   if(byId("opCalib")) byId("opCalib").onclick=startCalibration;
   if(byId("opCustEdit")) byId("opCustEdit").onclick=()=>openCustomProduct(activeCustom);
-  if(byId("opCustCol")) byId("opCustCol").onclick=()=>{ const p=(P.settings.customProducts||[]).find(x=>x.id===activeCustom); if(p) pickColor("Color for "+p.name,p.color,c=>{ p.color=c; if(byId("opCustSw"))byId("opCustSw").style.background=c; refreshAll(); }); };
+  if(byId("opCustCol")) byId("opCustCol").onclick=()=>{ const p=productOf(activeCustom); if(p) pickColor("Color for "+p.name,p.color,c=>{ p.color=c; if(byId("opCustSw"))byId("opCustSw").style.background=c; refreshAll(); }); };
   if(byId("opDsSize")) byId("opDsSize").onchange=e=>{ dsDrawSize=e.target.value; };
   if(byId("opDsBrand")) byId("opDsBrand").onchange=e=>{
     P.settings.downspoutBrand=e.target.value;
@@ -2132,6 +2153,10 @@ function addOption(mode){   // mode: "dup" (copy active drawing+pricing) | "blan
 function deleteOption(i){
   if(OPTIONS.length<=1||!OPTIONS[i]) return;
   if(!confirm("Delete "+OPTIONS[i].name+"?")) return;
+  // Flush the live drawing/pricing/history back onto the active option first.
+  // restore() reassigns P.objects/P.settings, so without this an undo followed by
+  // deleting a *different* tab reactivated the option's stale pre-undo arrays.
+  captureActive();
   OPTIONS.splice(i,1);
   if(activeOpt>=OPTIONS.length) activeOpt=OPTIONS.length-1;
   else if(i<activeOpt) activeOpt--;
@@ -2677,7 +2702,7 @@ function finishCustom(){
   const auto=P.settings.autoMeasure;
   let lengths=new Array(pts.length-1).fill("");
   if(auto){ for(let i=0;i<pts.length-1;i++) lengths[i]=autoLen(pts[i],pts[i+1]); }
-  const p=(P.settings.customProducts||[]).find(x=>x.id===activeCustom);
+  const p=productOf(activeCustom);
   const o={t:"custom",id:uid(),productId:activeCustom,pts,lengths,color:(p?p.color:null)};
   P.objects.push(o); sel=new Set([o.id]); drawing=null; refreshAll();
   if(!auto){ setTimeout(()=>openSeg(o.id,0),30); }
@@ -2825,6 +2850,9 @@ function commitEditor(){
   const o = objById(editing.objId);
   if(o && inp){
     const val = inp.value;
+    // Every committed edit is undoable. Only the length editor recorded before,
+    // so a downspout's run — the main data entry on the diagram — couldn't be undone.
+    // Unchanged values don't record, to keep the history free of no-op steps.
     if(editing.kind==="seglen"){
       recordHistory();
       o.lengths[editing.seg] = (val===""?"":Math.max(0,+val||0));
@@ -2832,11 +2860,15 @@ function commitEditor(){
         resizeRunSegment(o, editing.seg);
       }
     } else if(editing.kind==="dsnote"){
+      if((o.notation||"")!==val) recordHistory();
       o.notation = val;
     } else if(editing.kind==="text"){
+      if((o.text||"")!==val) recordHistory();
       o.text = val;
     } else if(editing.kind==="stamp"){
-      o.text = (val||"").toUpperCase();
+      const nv=(val||"").toUpperCase();
+      if((o.text||"")!==nv) recordHistory();
+      o.text = nv;
     }
   }
   FE.style.display="none";
@@ -3012,7 +3044,6 @@ const LINES = [
   ...DS_STYLES.map(d=>({key:d.offsetKey,    label:'OFFSET '+d.short,        kind:"ea", src:"auto"})),
   ...GUTTER_STYLES.map(g=>({key:g.endKey,   label:'END CAPS '+g.short,      kind:"ea", src:"auto"})),
 ];
-const SETTING_OF = {diverters:"diverters",splashBlocks:"splashBlocks",leafGuard6:"leafGuard6",leafGuard5:"leafGuard5"};
 
 function esc(s){ return (s==null?"":(""+s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
@@ -3086,7 +3117,7 @@ function buildEstimatePane(){
   h+=`<div class="totline foot"><span>${P.settings.depositPct}% Deposit</span><span class="v">${money(r.deposit)}</span></div>`;
   h+=`<div class="totline foot"><span>Balance on completion</span><span class="v">${money(r.remaining)}</span></div>`;
 
-  h+=`<div class="note" style="margin-top:12px">Quantities update automatically as you draw. Editable fields (diverters, splash blocks, leaf guard) are entered by hand. Highlight demo / misc areas with the highlighter tool and enter the dollar amount under <b>Pricing → Misc / Demo / Labor</b>.</div>`;
+  h+=`<div class="note" style="margin-top:12px">Quantities update automatically as you draw. Editable fields (diverters, leaf guard) are entered by hand. Splash blocks are placed on the diagram with the SPL tool. Highlight demo / misc areas with the highlighter tool and enter the dollar amount under <b>Pricing → Misc / Demo / Labor</b>.</div>`;
 
   pane.innerHTML=h;
 
@@ -3254,6 +3285,7 @@ function wirePricing(){
 }
 
 let railBuilt=false;
+let railPane="estimate";      // which rail tab is on screen
 function buildRail(){
   buildEstimatePane();
   buildJobPane();
@@ -3264,6 +3296,10 @@ function buildRail(){
         document.querySelectorAll(".rail-tab").forEach(x=>x.classList.toggle("active",x===t));
         const pane=t.dataset.pane;
         document.querySelectorAll(".rail-pane").forEach(p=>p.classList.toggle("active",p.dataset.pane===pane));
+        railPane=pane;
+        // the hidden panes go stale while you draw — refresh on the way in
+        if(pane==="job") buildJobPane();
+        else if(pane==="pricing") buildPricingPane();
       };
     });
     railBuilt=true;
@@ -3275,14 +3311,18 @@ function refreshSelInfo(){
   buildOptbar();
 }
 
-let _railRaf=0;
 function refreshAll(){
   draw();
+  // Rebuild only the pane you're actually looking at. This used to rebuild the whole
+  // Pricing pane on every refresh (both branches of a dead if/else called it), which
+  // threw away the rail's scroll position mid-edit. Restoring scrollTop covers the
+  // rebuild of whichever pane is live.
+  const sc=document.querySelector(".rail-scroll");
+  const top=sc?sc.scrollTop:0;
   buildEstimatePane();
-  // job + pricing panes only need rebuild when their own inputs changed; rebuild lazily
-  if(byId("paneJob").innerHTML==="") buildJobPane();
-  if(byId("panePricing").innerHTML==="") buildPricingPane();
-  else buildPricingPane();
+  if(railPane==="job") buildJobPane();
+  else if(railPane==="pricing") buildPricingPane();
+  if(sc && sc.scrollTop!==top) sc.scrollTop=top;
   if(OPTIONS.length) buildOptionsBar();   // keep tab labels / live totals current
 }
 
@@ -3292,7 +3332,7 @@ function refreshAll(){
 const modalWrap=byId("modalWrap");
 function openCustomProduct(editId){
   const list=P.settings.customProducts||(P.settings.customProducts=[]);
-  const ex = editId? list.find(p=>p.id===editId):null;
+  const ex = editId!=null ? productOf(editId) : null;
   let h="";
   const exMode=(ex&&ex.mode)||"line";
   h+=`<div class="note" style="margin-bottom:10px">Define a product priced per foot — it becomes its own tool. <b>Line</b> draws a measured run; <b>Demo</b> and <b>Screen</b> behave like the highlight tools (drag over the runs).</div>`;
@@ -3318,11 +3358,12 @@ function openCustomProduct(editId){
   byId("modalBody").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openCustomProduct(b.dataset.edit));
   byId("modalBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
     const id=b.dataset.del;
-    if(confirm("Delete this product and remove its drawn runs?")){
+    const doomed=productOf(id); if(!doomed) return;
+    if(confirm('Delete "'+doomed.name+'" and remove its drawn runs?')){
       recordHistory();
-      P.settings.customProducts=list.filter(p=>p.id!==id);
-      P.objects=P.objects.filter(o=>!(o.t==="custom"&&o.productId===id));
-      if(activeCustom===id){ activeCustom=null; setTool("gutter"); }
+      P.settings.customProducts=list.filter(p=>!sameProductId(p.id,id));
+      P.objects=P.objects.filter(o=>!(o.t==="custom"&&sameProductId(o.productId,id)));
+      if(sameProductId(activeCustom,id)){ activeCustom=null; setTool("gutter"); }
       buildDock(); refreshAll(); openCustomProduct();
     }
   });
@@ -3332,7 +3373,13 @@ function openModal(title,bodyHTML){
   byId("modalBody").innerHTML=bodyHTML;
   modalWrap.style.display="flex";
 }
-function closeModal(){ modalWrap.style.display="none"; byId("modalBody").innerHTML=""; }
+// Modals that a caller is awaiting register a dismiss handler here, so closing via
+// the ×, the backdrop or Escape settles the promise instead of hanging the caller.
+let _modalOnClose=null;
+function closeModal(){
+  modalWrap.style.display="none"; byId("modalBody").innerHTML="";
+  const f=_modalOnClose; _modalOnClose=null; if(f) f();
+}
 byId("modalClose").onclick=closeModal;
 modalWrap.addEventListener("mousedown",e=>{ if(e.target===modalWrap) closeModal(); });
 
@@ -4159,12 +4206,14 @@ function chooseExportOptions(){
     captureActive();
     let h=`<div class="note" style="margin-bottom:10px">Choose which option(s) to include in the PDF.</div>`;
     OPTIONS.forEach((o,i)=>{ h+=`<label class="fld" style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" data-opt="${i}" checked style="width:auto;flex:0 0 auto"><span style="font-weight:700;flex:1">${esc(o.name)}</span><span style="color:var(--text-soft)">${money(optionTotal(o))}</span></label>`; });
-    h+=`<div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="btn-sm" id="expAll">All</button><button class="btn-sm" id="expNone">None</button><button class="btn-sm" id="expGo" style="margin-left:auto;background:var(--prime);color:#fff;border-color:var(--prime)">Export PDF</button></div>`;
+    h+=`<div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="btn-sm" id="expAll">All</button><button class="btn-sm" id="expNone">None</button><button class="btn-sm" id="expCancel">Cancel</button><button class="btn-sm" id="expGo" style="margin-left:auto;background:var(--prime);color:#fff;border-color:var(--prime)">Export PDF</button></div>`;
     openModal("Export options", h);
+    _modalOnClose=()=>resolve([]);        // ×, backdrop or Escape cancels cleanly
     const body=byId("modalBody");
     body.querySelector("#expAll").onclick=()=>body.querySelectorAll("[data-opt]").forEach(c=>c.checked=true);
     body.querySelector("#expNone").onclick=()=>body.querySelectorAll("[data-opt]").forEach(c=>c.checked=false);
-    body.querySelector("#expGo").onclick=()=>{ const idxs=[...body.querySelectorAll("[data-opt]:checked")].map(c=>+c.dataset.opt); closeModal(); resolve(idxs); };
+    body.querySelector("#expCancel").onclick=()=>closeModal();
+    body.querySelector("#expGo").onclick=()=>{ const idxs=[...body.querySelectorAll("[data-opt]:checked")].map(c=>+c.dataset.opt); _modalOnClose=null; closeModal(); resolve(idxs); };
   });
 }
 
@@ -4360,7 +4409,8 @@ window.addEventListener("keydown",e=>{
     if(e.key.toLowerCase()==="a"){ e.preventDefault(); sel=new Set(P.objects.map(o=>o.id)); draw(); refreshSelInfo(); return; }
     return;
   }
-  if(e.key==="Delete"||e.key==="Backspace"){ if(sel.size){ e.preventDefault(); deleteSelected(); } return; }
+  // segSel counts too — the on-screen Delete button and the hint text both promise it
+  if(e.key==="Delete"||e.key==="Backspace"){ if(sel.size||segSel.size){ e.preventDefault(); deleteSelected(); } return; }
   if(e.key==="Enter"){ if(drawing&&drawing.t==="gutter"){ e.preventDefault(); finishGutter(); } else if(drawing&&drawing.t==="custom"){ e.preventDefault(); finishCustom(); } return; }
   if(e.key==="Escape"){ if(calib){calib=null;setHint(toolHint(tool));draw();} else if(drawing){cancelDrawing();} else if(sel.size){sel.clear();draw();refreshSelInfo();} return; }
   const k=e.key.toLowerCase();
