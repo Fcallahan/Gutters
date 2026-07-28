@@ -74,6 +74,13 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .tb-btn.ghost{background:transparent;border-color:#3a4d61}
 .tb-btn.ptool{padding:6px 10px}
 .tb-btn.ptool.active{background:var(--prime);border-color:var(--prime);color:#fff}
+/* autosave / photo-storage trouble indicator — this used to fail silently */
+#saveWarn{
+  background:#7a1d16;color:#ffd9d5;border:1px solid #b3352a;border-radius:7px;
+  padding:6px 11px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;
+  display:inline-flex;gap:6px;align-items:center;white-space:nowrap;
+}
+#saveWarn:hover{background:#932319}
 .page-tabs{display:flex;gap:4px;background:#0f161e;border-radius:8px;padding:3px}
 .page-tab{
   padding:6px 14px;border-radius:6px;cursor:pointer;color:#9fb0c0;font-weight:600;font-size:12.5px;border:0;background:transparent
@@ -283,6 +290,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
       <button class="page-tab" data-page="photos" id="tabPhotos">Photos</button>
     </div>
     <div class="tb-spacer"></div>
+    <button id="saveWarn" title="Tap for details" style="display:none"></button>
     <button class="tb-btn ghost" id="btnSettings" title="Job defaults, rates & rules">⚙ Settings</button>
     <button class="tb-btn ghost" id="btnNew">New</button>
     <button class="tb-btn ghost" id="btnLoad">Open</button>
@@ -513,6 +521,7 @@ function defaultProject(){
       screenEavRate:0,            // $/ft — Eav N Flow gutter screen
       screenLeafRate:0,           // $/ft — Leafblaster gutter screen
       cardFee:3,
+      amexFee:4,                  // shown in the PDF payment note (Amex surcharge)
       depositPct:25,
       payMethod:"cash",           // cash | card
       miscDemoLabor:0,
@@ -523,7 +532,7 @@ function defaultProject(){
       prices:{}                   // per-line unit prices (itemized)
     },
     objects:[],
-    photos:[]                     // {name,dataUrl,w,h,strokes:[{color,width,pts:[]}]}
+    photos:[]                     // {id,name,w,h,strokes:[...]} — image data lives in photoBlobs/IndexedDB
   };
 }
 
@@ -792,9 +801,14 @@ function parseDS(str){
       if(/^[0-9]+(\.[0-9]+)?$/.test(parts[0])) feet=parseFloat(parts[0]);
       else comps=parts[0];
     }else if(parts.length>1){
-      comps=parts[0];
       const last=parts[parts.length-1];
-      if(/^[0-9]+(\.[0-9]+)?$/.test(last)) feet=parseFloat(last);
+      if(/^[0-9]+(\.[0-9]+)?$/.test(last)){
+        // EVERY token before the footage is component notation, not just the first —
+        // the keypad has a SPC key and the hint says "space + feet", so "A A A 25"
+        // and "AAB 4 20" are normal input and must keep all their elbows/offsets.
+        comps=parts.slice(0,-1).join("");
+        feet=parseFloat(last);
+      }
       else comps=parts.join("");
     }
   }
@@ -3179,7 +3193,8 @@ function buildPricingPane(){
   h+=fld("Lump $ (highlighted areas)","pcMisc",s.miscDemoLabor,"number",'step="1" inputmode="decimal"');
 
   h+=`<div class="sec-h">Deposit &amp; payment</div>`;
-  h+=`<div class="row2">${fld("Deposit %","pcDep",s.depositPct,"number",'step="1" inputmode="decimal"')}${fld("Card fee %","pcCard",s.cardFee,"number",'step="0.5" inputmode="decimal"')}</div>`;
+  h+=`<div class="row3">${fld("Deposit %","pcDep",s.depositPct,"number",'step="1" inputmode="decimal"')}${fld("Card fee %","pcCard",s.cardFee,"number",'step="0.5" inputmode="decimal"')}${fld("Amex fee %","pcAmex",s.amexFee,"number",'step="0.5" inputmode="decimal"')}</div>`;
+  h+=`<div class="note">The deposit % and both card rates are printed verbatim on the estimate, so the PDF always matches these numbers.</div>`;
   h+=`<div class="fld"><label>Pay method</label><div class="seg-toggle"><button data-pay="cash" class="${s.payMethod==="cash"?"on":""}">Cash / Check</button><button data-pay="card" class="${s.payMethod==="card"?"on":""}">Card (+${s.cardFee}%)</button></div></div>`;
 
   h+=`<div class="sec-h">Footage allowances</div>`;
@@ -3222,7 +3237,7 @@ function wirePricing(){
   const numP=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; buildPricingPane(); refreshAll(); }; };
   num("pcGutRate","flatGutterRate");num("pcDsRate","flatDownspoutRate");
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
-  num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");
+  num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");num("pcAmex","amexFee");
   num("pcCorner","footagePerCorner");numP("pcOutlet","footagePerOutlet");numP("pcValley","footagePerValley");
   numP("pcElbow","footagePerElbow");numP("pcOffset","footagePerOffset");numP("pcEndcap","footagePerEndcap");
   num("pcBay","bayDeviation");
@@ -3407,6 +3422,67 @@ byId("tabDiagram").onclick=()=>setPage("diagram");
 byId("tabPhotos").onclick=()=>setPage("photos");
 
 /* ============================================================ */
+/* PHOTO BLOB STORE                                            */
+/* ============================================================ */
+/* Photo/title-image base64 NEVER lives on P.photos or P.meta — only an id does.
+   That keeps two things small that used to be enormous:
+     • undo snapshots  (were ~27 MB each with 8 photos; now a few KB)
+     • the localStorage autosave (blobs blew WKWebView's quota at ~14 MB, and the
+       failure was swallowed, so the whole job silently stopped persisting)
+   Blobs live in memory here and are mirrored to IndexedDB, which has no such
+   quota. The JSON you get from "Save" still embeds the images so it stays a
+   complete, portable backup. */
+const photoBlobs = new Map();          // id -> dataUrl
+let photoIdSeq = 1;
+function newPhotoId(){ return "ph"+(Date.now().toString(36))+"_"+(photoIdSeq++); }
+function photoSrc(id){ return (id && photoBlobs.get(id)) || ""; }
+function putBlob(id,dataUrl){ if(!id||!dataUrl) return; photoBlobs.set(id,dataUrl); idbPut(id,dataUrl); }
+
+const IDB_NAME="primeGutterPhotos", IDB_STORE="blobs";
+let _idb=null, idbBroken=false;
+function idbOpen(){
+  if(_idb) return Promise.resolve(_idb);
+  if(idbBroken) return Promise.reject(new Error("indexeddb unavailable"));
+  return new Promise((res,rej)=>{
+    let rq;
+    try{ rq=indexedDB.open(IDB_NAME,1); }catch(e){ idbBroken=true; rej(e); return; }
+    rq.onupgradeneeded=()=>{ const db=rq.result; if(!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE); };
+    rq.onsuccess=()=>{ _idb=rq.result; res(_idb); };
+    rq.onerror=()=>{ idbBroken=true; rej(rq.error); };
+    rq.onblocked=()=>{ idbBroken=true; rej(new Error("indexeddb blocked")); };
+  });
+}
+function idbTx(mode,fn){
+  return idbOpen().then(db=>new Promise((res,rej)=>{
+    const tx=db.transaction(IDB_STORE,mode), st=tx.objectStore(IDB_STORE);
+    let out; try{ out=fn(st); }catch(e){ rej(e); return; }
+    tx.oncomplete=()=>res(out && out.result!==undefined ? out.result : out);
+    tx.onerror=()=>rej(tx.error);
+    tx.onabort=()=>rej(tx.error);
+  }));
+}
+// Photo persistence is best-effort: if IndexedDB is unavailable the app keeps
+// working from memory, but we say so instead of losing the photos quietly.
+function idbPut(id,dataUrl){ return idbTx("readwrite",st=>st.put(dataUrl,id)).catch(()=>{ notePhotoStorageFailure(); }); }
+function idbDel(id){ return idbTx("readwrite",st=>st.delete(id)).catch(()=>{}); }
+function idbLoadAll(){
+  return idbTx("readonly",st=>st.getAllKeys()).then(keys=>{
+    if(!keys||!keys.length) return 0;
+    return idbTx("readonly",st=>st.getAll()).then(vals=>{
+      keys.forEach((k,i)=>{ if(vals[i]) photoBlobs.set(k,vals[i]); });
+      return keys.length;
+    });
+  }).catch(()=>{ notePhotoStorageFailure(); return 0; });
+}
+// drop blobs no longer referenced by any photo or the title image (startup only,
+// so that undo/redo of a photo removal can still find its image mid-session)
+function idbGC(){
+  const live=new Set((P.photos||[]).map(p=>p.id));
+  if(P.meta && P.meta.titleImage) live.add(P.meta.titleImage);
+  [...photoBlobs.keys()].forEach(k=>{ if(!live.has(k)){ photoBlobs.delete(k); idbDel(k); } });
+}
+
+/* ============================================================ */
 /* PHOTO MARKUP PAGE                                           */
 /* ============================================================ */
 let photoPen={color:"#e01b24",width:7};
@@ -3532,18 +3608,35 @@ function translateMarkN(st,dx,dy){
 byId("btnAddPhoto").onclick=()=>byId("photoInput").click();
 byId("photoInput").onchange=e=>{
   const files=[...e.target.files];
+  if(!files.length) return;
+  // Reserve a slot per file up front so the photos land in the order they were
+  // picked — the decodes finish out of order, which used to shuffle them.
+  const slots=new Array(files.length).fill(null);
   let pending=files.length;
-  files.forEach(f=>{
+  const finish=()=>{
+    if(--pending>0) return;
+    const added=slots.filter(Boolean);
+    if(added.length){
+      recordHistory();                 // importing photos is now undoable
+      added.forEach(p=>P.photos.push(p));
+    }
+    renderPhotos();
+    saveLocal();                       // ...and actually persisted; this never fired before
+  };
+  files.forEach((f,i)=>{
     const rd=new FileReader();
     rd.onload=()=>{
       const img=new Image();
       img.onload=()=>{
-        P.photos.push({name:f.name,dataUrl:rd.result,w:img.naturalWidth,h:img.naturalHeight,strokes:[]});
-        if(--pending===0) renderPhotos();
+        const id=newPhotoId();
+        putBlob(id,rd.result);         // image data goes to the blob store, not onto P
+        slots[i]={id,name:f.name,w:img.naturalWidth,h:img.naturalHeight,strokes:[]};
+        finish();
       };
-      img.onerror=()=>{ if(--pending===0) renderPhotos(); };
+      img.onerror=finish;
       img.src=rd.result;
     };
+    rd.onerror=finish;
     rd.readAsDataURL(f);
   });
   e.target.value="";
@@ -3553,11 +3646,20 @@ byId("btnTitleImg").onclick=()=>byId("titleInput").click();
 byId("titleInput").onchange=e=>{
   const f=e.target.files[0]; if(!f){ return; }
   const rd=new FileReader();
-  rd.onload=()=>{ P.meta.titleImage=rd.result; renderPhotos(); scheduleSave&&scheduleSave(); };
+  rd.onload=()=>{
+    recordHistory();
+    const id=newPhotoId(); putBlob(id,rd.result);   // meta holds the id, never the image
+    P.meta.titleImage=id;
+    renderPhotos(); saveLocal();
+  };
   rd.readAsDataURL(f);
   e.target.value="";
 };
-function removeTitleImage(){ P.meta.titleImage=""; renderPhotos(); scheduleSave&&scheduleSave(); }
+function removeTitleImage(){
+  recordHistory();
+  P.meta.titleImage="";      // blob is left in the store so undo can bring it back; GC'd at startup
+  renderPhotos(); saveLocal();
+}
 
 function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
   for(const st of ph.strokes){
@@ -3601,7 +3703,7 @@ function renderPhotos(){
   if(P.meta.titleImage){
     const tc=document.createElement("div"); tc.className="photo-card title-card";
     tc.innerHTML=`<div class="title-tag">TITLE IMAGE — first page of estimate</div>
-      <img class="title-preview" src="${P.meta.titleImage}">
+      <img class="title-preview" src="${photoSrc(P.meta.titleImage)}">
       <div class="pc-bar"><span style="flex:1;font-size:11px;color:#33455a;font-weight:700">Cover photo</span>
         <button class="btn-sm" data-titlechg>Replace</button>
         <button class="btn-sm danger" data-titledel>Remove</button></div>`;
@@ -3651,7 +3753,7 @@ function renderPhotos(){
     const pctx=cv.getContext("2d");
     let imLoaded=false; const im=new Image();
     im.onload=()=>{ imLoaded=true; redrawPhoto(); };
-    im.src=ph.dataUrl;
+    im.src=photoSrc(ph.id);
     function redrawPhoto(cursor){
       pctx.clearRect(0,0,cw,chh);
       pctx.save();
@@ -3879,12 +3981,37 @@ updateUndoButtons();
 /* ============================================================ */
 /* SAVE / LOAD / NEW                                           */
 /* ============================================================ */
-function serialize(){
+/* `withPhotos` controls whether image data is embedded:
+     • Save / export / print -> true  (a portable, self-contained backup file)
+     • localStorage autosave -> false (blobs live in IndexedDB; embedding them
+       here is what silently blew the quota and killed autosave for the whole job) */
+function serialize(withPhotos){
   captureActive();
-  return JSON.stringify({v:2, meta:P.meta, photos:P.photos, nextId, stampPresets, active:activeOpt,
-    options:OPTIONS.map(o=>({id:o.id,name:o.name,settings:o.settings,objects:o.objects}))}, null, 2);
+  const photos = withPhotos
+    ? (P.photos||[]).map(p=>Object.assign({}, p, {dataUrl:photoSrc(p.id)}))
+    : (P.photos||[]);
+  const payload = {v:3, meta:P.meta, photos, nextId, stampPresets, active:activeOpt,
+    options:OPTIONS.map(o=>({id:o.id,name:o.name,settings:o.settings,objects:o.objects}))};
+  if(withPhotos && P.meta.titleImage) payload.titleImageData = photoSrc(P.meta.titleImage);
+  return JSON.stringify(payload, null, 2);
 }
-// load a parsed save (v2 options format, or legacy single-drawing) into OPTIONS + shared state
+/* Pull any embedded image data out of a loaded save into the blob store, and give
+   every photo a stable id. Handles the older formats, where each photo carried its
+   own `dataUrl` and `meta.titleImage` was itself a data: URL rather than an id. */
+function absorbPhotoBlobs(d){
+  (P.photos||[]).forEach(p=>{
+    if(!p.id) p.id=newPhotoId();
+    if(p.dataUrl){ putBlob(p.id,p.dataUrl); delete p.dataUrl; }
+    if(!p.strokes) p.strokes=[];
+  });
+  const ti=P.meta && P.meta.titleImage;
+  if(ti && /^data:/.test(ti)){          // legacy: the blob was stored inline on meta
+    const id=newPhotoId(); putBlob(id,ti); P.meta.titleImage=id;
+  } else if(ti && d && d.titleImageData){
+    putBlob(ti,d.titleImageData);
+  }
+}
+// load a parsed save (v3/v2 options format, or legacy single-drawing) into OPTIONS + shared state
 function applyLoaded(d){
   const dp=defaultProject();
   if(d && Array.isArray(d.options)){
@@ -3904,6 +4031,7 @@ function applyLoaded(d){
       objects:proj.objects||[], history:[], hidx:-1 }];
     optSeq=2; activeOpt=0;
   }
+  absorbPhotoBlobs(d);
   nextId=(d&&d.nextId) || (OPTIONS.reduce((m,o)=>Math.max(m,(o.objects||[]).reduce((mm,x)=>Math.max(mm,x.id||0),0)),0)+1);
   if(d&&d.stampPresets&&d.stampPresets.length){ stampPresets.length=0; d.stampPresets.forEach(s=>stampPresets.push(s)); activeStamp=stampPresets[0]; }
   const o=OPTIONS[activeOpt];
@@ -3925,7 +4053,7 @@ function download(name,text,type){
 }
 byId("btnSave").onclick=()=>{
   const fn=(P.meta.name||"estimate").replace(/[^\w\-]+/g,"_").slice(0,40)+"_gutter.json";
-  download(fn,serialize());
+  download(fn,serialize(true));   // exported backups embed the photos
   saveLocal();
 };
 byId("btnLoad").onclick=()=>byId("fileInput").click();
@@ -3938,6 +4066,8 @@ byId("fileInput").onchange=e=>{
       sel.clear();
       byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
       buildRail(); buildDock(); buildOptbar(); buildOptionsBar(); zoomFit(); refreshAll();
+      if(curPage==="photos") renderPhotos();
+      saveLocal();
     }catch(err){ alert("Could not read that file: "+err.message); }
   };
   rd.readAsText(f); e.target.value="";
@@ -3946,13 +4076,40 @@ byId("btnNew").onclick=()=>{
   captureActive();
   if(OPTIONS.some(o=>o.objects&&o.objects.length)||(P.photos&&P.photos.length)){ if(!confirm("Start a new estimate? Unsaved changes will be lost.")) return; }
   P=defaultProject(); nextId=1; sel.clear();
+  photoBlobs.forEach((_,k)=>idbDel(k)); photoBlobs.clear();   // drop the old job's images
   initSingleOption(); seedHistory(); OPTIONS[0].history=history; OPTIONS[0].hidx=hidx;
   byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
   buildRail(); buildOptbar(); buildOptionsBar(); zoomFit(); refreshAll();
+  if(curPage==="photos") renderPhotos();
 };
 
-/* light autosave to localStorage (guarded for file://) */
-function saveLocal(){ try{ localStorage.setItem("primeGutterEstimate",serialize()); }catch(e){} }
+/* ---- autosave status ----
+   These failures used to be swallowed by a bare catch{}, so a job could stop
+   persisting for the rest of the day with no indication. Now they surface. */
+let saveTrouble="";
+function setSaveTrouble(msg){
+  if(saveTrouble===msg) return;
+  saveTrouble=msg;
+  const b=byId("saveWarn"); if(!b) return;
+  b.style.display = msg ? "inline-flex" : "none";
+  if(msg) b.textContent = "⚠ "+msg;
+}
+function notePhotoStorageFailure(){ setSaveTrouble("Photos won't be saved on this device"); }
+function saveLocal(){
+  try{
+    localStorage.setItem("primeGutterEstimate",serialize(false));
+    if(!idbBroken) setSaveTrouble("");
+  }catch(e){
+    setSaveTrouble("Autosave failed — tap Save to export this job");
+  }
+}
+byId("saveWarn").onclick=()=>{
+  openModal("Autosave problem", `<div class="note" style="margin-bottom:10px">${esc(saveTrouble)}</div>
+    <p style="font-size:12.5px;line-height:1.55;color:var(--text-soft)">This device is refusing to store the job automatically, so your work is
+    only held in memory and will be lost if the app is closed or reclaimed.</p>
+    <p style="font-size:12.5px;line-height:1.55;color:var(--text-soft)"><b>Use the Save button</b> to export a
+    <code>.json</code> backup (it includes the photos) and keep working. Re-open it later with <b>Open</b>.</p>`);
+};
 function loadLocal(){
   try{
     const s=localStorage.getItem("primeGutterEstimate");
@@ -3992,7 +4149,7 @@ async function photoSnapshot(ph){
       res(c.toDataURL("image/jpeg",0.82));
     };
     im.onerror=()=>res("");
-    im.src=ph.dataUrl;
+    im.src=photoSrc(ph.id);
   });
 }
 // pick which options go into the PDF (skips the dialog when there's only one)
@@ -4027,7 +4184,9 @@ async function buildPrintDoc(){
   // one section per chosen option; aggregate color-chart usage across them
   const usedByBrand={}; const brandSet=new Set();
   const addRole=(brand,name,role)=>{ if(!name)return; const mm=usedByBrand[brand]=usedByBrand[brand]||{}; (mm[name]=mm[name]||[]); if(!mm[name].includes(role)) mm[name].push(role); };
-  const disclaimer=`<p class="muted" style="margin-top:14px">Includes all labor and materials, 100% clean up, haul away. Estimate based on visual inspection; a change order will be submitted for additional work. 25% deposit required; remaining balance due upon completion. Lifetime paint and materials warranty.</p>`;
+  // Deposit % is a per-option setting, so the prose has to be built per option —
+  // a hardcoded "25%" here contradicted the deposit row printed just above it.
+  const disclaimerFor=(s)=>`<p class="muted" style="margin-top:14px">Includes all labor and materials, 100% clean up, haul away. Estimate based on visual inspection; a change order will be submitted for additional work. ${r1(+s.depositPct||0)}% deposit required; remaining balance due upon completion. Lifetime paint and materials warranty.</p>`;
   let optionSections="";
   for(let k=0;k<chosen.length;k++){
     const opt=OPTIONS[chosen[k]]; if(!opt) continue;
@@ -4053,10 +4212,10 @@ async function buildPrintDoc(){
       <tr><td>${s.depositPct}% Deposit</td><td class="n">${money(r.deposit)}</td></tr>
       <tr><td>Balance on completion</td><td class="n">${money(r.remaining)}</td></tr>
     </table>
-    <p class="muted cardnote">Payment processing: a <b>3% fee</b> applies to all credit &amp; debit card payments and a <b>4% fee</b> applies to American Express. No fee for cash or check.</p>`;
+    <p class="muted cardnote">Payment processing: a <b>${r1(+s.cardFee||0)}% fee</b> applies to all credit &amp; debit card payments and a <b>${r1(+s.amexFee||0)}% fee</b> applies to American Express. No fee for cash or check.</p>`;
     const diagramHTML = diagram ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">${showHeads?esc(opt.name)+" — ":""}Diagram</h3><img class="diagram" src="${diagram}"></div>` : "";
     const head = showHeads ? `<h2 class="opt-title">${esc(opt.name)} — ${money(r.grand)}</h2>` : "";
-    optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimer}</section>${diagramHTML}`;
+    optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimerFor(s)}</section>${diagramHTML}`;
   }
   // restore the live (active) option + camera
   P.settings=OPTIONS[savedActive].settings; P.objects=OPTIONS[savedActive].objects; ensurePrices();
@@ -4076,7 +4235,7 @@ async function buildPrintDoc(){
   let photosHTML="";
   if(photos.length){ photosHTML=`<h3 class="sec photo-head">Job Photos</h3>`; for(let i=0;i<photos.length;i+=4){ const cells=photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join(""); photosHTML+=`<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`; } }
   const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
-  const titleImgHTML = m.titleImage ? `<div class="title-hero"><img src="${m.titleImage}"></div>` : "";
+  const titleImgHTML = m.titleImage ? `<div class="title-hero"><img src="${photoSrc(m.titleImage)}"></div>` : "";
 
   const wYears = String(m.warrantyYears||"").trim();
   const warrantyHTML = wYears ? `<div class="warranty">
@@ -4223,6 +4382,13 @@ refreshAll=function(){ _origRefreshAll(); scheduleSave(); };
 function init(){
   ensurePrices();
   if(!loadLocal()){ initSingleOption(); seedHistory(); }
+  // The autosave holds only photo ids; the images come back from IndexedDB.
+  idbLoadAll().then(()=>{
+    idbGC();                                     // drop images no longer referenced
+    const missing=(P.photos||[]).filter(p=>!photoSrc(p.id)).length;
+    if(missing) setSaveTrouble(missing+" photo"+(missing>1?"s":"")+" could not be restored");
+    if(curPage==="photos") renderPhotos();
+  });
   resize();
   buildDock();
   buildRail();
