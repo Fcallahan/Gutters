@@ -183,6 +183,10 @@ input,select,textarea{font-family:inherit;font-size:13px}
 #selActionBar .db-x{background:#3a4d61;color:#dce6ef}
 #photoLineBar{position:absolute;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:40;display:flex;gap:8px;background:rgba(20,28,38,.94);padding:8px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #photoLineBar button{padding:12px 20px;border-radius:9px;border:0;font-weight:800;font-size:15px;cursor:pointer}
+#photoSelBar{position:absolute;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:41;display:flex;flex-wrap:wrap;justify-content:center;width:max-content;max-width:calc(100% - 24px);gap:8px;background:rgba(20,28,38,.94);padding:8px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#photoSelBar button{padding:12px 15px;border-radius:9px;border:0;font-weight:800;font-size:15px;cursor:pointer;white-space:nowrap}
+#photoSelBar .db-del{background:#e01b24;color:#fff}
+#photoSelBar .db-x{background:#3a4d61;color:#dce6ef}
 #photoStage{position:absolute;inset:0;display:none;flex-direction:column}
 
 /* tool dock */
@@ -410,6 +414,15 @@ input,select,textarea{font-family:inherit;font-size:13px}
         <div id="photoLineBar" style="display:none">
           <button id="plUndo" class="db-x">↶ Undo point</button>
           <button id="plDone" class="db-go">✓ Done</button>
+        </div>
+        <!-- acts on the current photo-markup selection (there was no on-screen
+             delete at all before, so marks could only be removed with a keyboard) -->
+        <div id="photoSelBar" style="display:none">
+          <button id="psEdit" class="db-x">✎ Edit text</button>
+          <button id="psSmaller" class="db-x" title="Smaller text">A−</button>
+          <button id="psBigger" class="db-x" title="Bigger text">A+</button>
+          <button id="psDelete" class="db-del">🗑 <span id="psDelLabel">Delete</span></button>
+          <button id="psClear" class="db-x">Deselect</button>
         </div>
       </div>
     </div>
@@ -1291,6 +1304,7 @@ function chip(text,sx,sy,opt){
    offset (world units), with a thin leader line back to the anchor when moved */
 function labelOffsetOf(o,key){
   if(key==="note") return o.noteOff||null;
+  if(key==="size") return o.sizeOff||null;
   return (o.segLabelOff && o.segLabelOff[key]) || null;
 }
 function segChip(o,key,mx,my,text,opt){
@@ -1442,10 +1456,13 @@ function drawDS(o){
   const _dsz=chipPx(11);
   const box=segChip(o,"note",s.x,s.y+20*k,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
   addLabelBox("dsnote",o.id,box.x,box.y,box.w,box.h);
-  // size tag
-  const _stz=chipPx(9);
-  chip(sz,s.x,s.y-20*k,{size:_stz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_stz*0.42),r:4});
   addLabelBox("obj",o.id,s.x-9*k,s.y-9*k,18*k,18*k);
+  // size tag — draggable like the notation chip, so it can be moved off a crowded
+  // corner of the diagram. Registered last so it wins the hit test over the marker.
+  const _stz=chipPx(9);
+  const sbox=segChip(o,"size",s.x,s.y-20*k,sz,{size:_stz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_stz*0.42),r:4});
+  const grab=lastPtrType==="touch"?5:2;   // a little slack; the tag is small
+  addLabelBox("dssize",o.id,sbox.x-grab,sbox.y-grab,sbox.w+grab*2,sbox.h+grab*2);
 }
 
 function drawValley(o){
@@ -1815,7 +1832,7 @@ function setTool(id){
 }
 function toolHint(t){
   return ({
-    select:"Tap to select a run • drag to move • drag the dots to adjust corners • tap a selected run again to pick one segment, then Delete to remove just it • drag a label to reposition • Delete removes",
+    select:"Tap to select a run • drag to move • drag the dots to adjust corners • tap a selected run again to pick one segment, then Delete to remove just it • drag any label (footage, downspout note, 3×4 tag) to reposition it, double-tap it to snap back • Delete removes",
     hand:"Drag to pan the diagram",
     gutter:"Drag to draw a run, lift to finish • start on an existing end (green ring) to add a corner • (mouse: click corners, then ✓ Finish)",
     ds:"Tap to drop a downspout • then type its run, e.g. \"AAA 20\" — 1 outlet is automatic • change its color any time via Select",
@@ -1928,7 +1945,10 @@ function buildOptbar(){
       h+= g('<label>Brand</label><select id="opSelDsBrand"><option value="">Match job ('+downspoutBrand()+')</option>'+BRANDS.map(b=>'<option value="'+b+'"'+(one.brand===b?' selected':'')+'>'+b+'</option>').join("")+'</select>')
         + g('<label>Spout color</label><span class="swatch" id="opSelSw" style="background:'+colorHex(cur,oBrand)+'"></span><select id="opSelDsColor">'+dsColorOpts+'</select>')
         + g('<label>Size</label><select id="opSelDsSize"'+(szs.length<2?' disabled':'')+'>'+szs.map(s=>'<option value="'+s+'"'+(curSz===s?' selected':'')+'>'+dsStyle(s).short+'</option>').join("")+'</select>')
-        + '<span class="mini" style="color:var(--text-soft)">Override for brick vs. stucco, etc.</span>' + dv;
+        + '<span class="mini" style="color:var(--text-soft)">Override for brick vs. stucco, etc.</span>';
+      // an explicit button beats relying on a double-tap landing on a small chip
+      if(one.sizeOff||one.noteOff) h+= g('<button class="chip" id="opSelDsResetLbl">↺ Reset label positions</button>');
+      h+= dv;
     } else if(one && one.t==="gutter"){
       const fe=freeEnds(one); const cm=one.caps||[true,true];
       const capChk=(i)=> fe[i] ? '<input type="checkbox" id="opSelCap'+i+'" '+((cm[i]!==false)?'checked':'')+'>' : '<input type="checkbox" disabled>';
@@ -2029,6 +2049,7 @@ function wireOptbar(){
   };
   if(byId("opSelDsColor")) byId("opSelDsColor").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); o.color=e.target.value||null; if(byId("opSelSw"))byId("opSelSw").style.background=colorHex(o.color||P.settings.downspoutColor,effBrand(o)); refreshAll(); } };
   if(byId("opSelDsSize")) byId("opSelDsSize").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); o.size=e.target.value; refreshAll(); } };
+  if(byId("opSelDsResetLbl")) byId("opSelDsResetLbl").onclick=()=>{ const o=selOne(); if(o){ recordHistory(); o.sizeOff=null; o.noteOff=null; buildOptbar(); refreshAll(); } };
   if(byId("opSelGutBrand")) byId("opSelGutBrand").onchange=e=>{
     const o=selOne(); if(!o) return; recordHistory();
     const v=e.target.value;
@@ -2102,7 +2123,7 @@ function restore(s){
   nextId=s.nextId; sel.clear();
   if(typeof photoSelMarks!=="undefined" && photoSelMarks) photoSelMarks.clear();
   refreshAll();
-  if(curPage==="photos"){ if(typeof cancelPhotoLine==="function") cancelPhotoLine(); renderPhotos(); }
+  if(curPage==="photos"){ if(typeof cancelPhotoLine==="function") cancelPhotoLine(); renderPhotos(); if(typeof updatePhotoSelBar==="function") updatePhotoSelBar(); }
   updateUndoButtons();
 }
 function undo(){ if(hidx>0){hidx--;restore(history[hidx]);} }
@@ -2394,11 +2415,14 @@ function onDown(e){
     const gv=gutterVertexHit(pt); if(gv){ vertexDrag={o:gv.o,idx:gv.idx,oldPos:{x:gv.o.pts[gv.idx].x,y:gv.o.pts[gv.idx].y}}; return; }
     const hit=hitTest(pt);
     if(hit){
-      if(hit.kind==="seglen"||hit.kind==="dsnote"||hit.kind==="strokelabel"){
+      if(hit.kind==="seglen"||hit.kind==="dsnote"||hit.kind==="strokelabel"||hit.kind==="dssize"){
         // grab a measurement number / note / demo+screen footage label: dragging moves just
         // that label (offset stored on its parent object); a tap on a seglen/note opens its editor.
         const o=objById(hit.objId);
-        const cur = hit.kind==="dsnote" ? (o&&o.noteOff) : hit.kind==="strokelabel" ? (o&&o.labelOff) : (o&&o.segLabelOff&&o.segLabelOff[hit.seg]);
+        const cur = hit.kind==="dsnote" ? (o&&o.noteOff)
+                  : hit.kind==="dssize" ? (o&&o.sizeOff)
+                  : hit.kind==="strokelabel" ? (o&&o.labelOff)
+                  : (o&&o.segLabelOff&&o.segLabelOff[hit.seg]);
         const startOff = cur ? {x:cur.x||0,y:cur.y||0} : {x:0,y:0};
         press={pt,mode:"moveLabel",hit,startOff,moved:false};
       }else{
@@ -2530,6 +2554,7 @@ function onMove(e){
       if(o){
         const nx=press.startOff.x+wdx, ny=press.startOff.y+wdy;
         if(press.hit.kind==="dsnote"){ o.noteOff={x:nx,y:ny}; }
+        else if(press.hit.kind==="dssize"){ o.sizeOff={x:nx,y:ny}; }
         else if(press.hit.kind==="strokelabel"){ o.labelOff={x:nx,y:ny}; }
         else { o.segLabelOff=o.segLabelOff||{}; o.segLabelOff[press.hit.seg]={x:nx,y:ny}; }
       }
@@ -2581,7 +2606,15 @@ function onUp(e){
         }
       } else { recordHistory(); }
     } else if(press.mode==="moveLabel"){
-      if(!press.moved){ if(press.hit && EDITABLE.has(press.hit.kind)) openEditorFor(press.hit); }
+      if(!press.moved){
+        if(press.hit && EDITABLE.has(press.hit.kind)) openEditorFor(press.hit);
+        // the size tag has nothing to edit, so a tap selects its downspout instead
+        else if(press.hit && press.hit.kind==="dssize"){
+          if(!e.shiftKey){ sel.clear(); segSel.clear(); }
+          sel.add(press.hit.objId);
+          setHint("Downspout selected — drag the 3×4 tag to move it clear of the drawing • double-tap the tag to snap it back.");
+        }
+      }
       else { recordHistory(); }
     } else if(press.mode==="marquee"){
       selectInMarquee(marquee); marquee=null;
@@ -2642,8 +2675,21 @@ function onUp(e){
 }
 
 function onDbl(e){
-  if(drawing&&drawing.t==="gutter"){ finishGutter(); }
-  else if(drawing&&drawing.t==="custom"){ finishCustom(); }
+  if(drawing&&drawing.t==="gutter"){ finishGutter(); return; }
+  if(drawing&&drawing.t==="custom"){ finishCustom(); return; }
+  // double-tap a label that has been dragged away -> snap it back to its anchor,
+  // so a label parked off-screen is always recoverable
+  if(tool==="select"){
+    const hit=hitTest(evtPos(e));
+    if(!hit) return;
+    const o=objById(hit.objId); if(!o) return;
+    let cleared=false;
+    if(hit.kind==="dsnote" && o.noteOff){ o.noteOff=null; cleared=true; }
+    else if(hit.kind==="dssize" && o.sizeOff){ o.sizeOff=null; cleared=true; }
+    else if(hit.kind==="strokelabel" && o.labelOff){ o.labelOff=null; cleared=true; }
+    else if(hit.kind==="seglen" && o.segLabelOff && o.segLabelOff[hit.seg]){ delete o.segLabelOff[hit.seg]; cleared=true; }
+    if(cleared){ recordHistory(); setHint("Label snapped back to its anchor."); refreshAll(); }
+  }
 }
 
 function finishGutter(){
@@ -3464,6 +3510,7 @@ function setPage(pg){
   const ps=byId("photoStage");
   if(pg==="photos"){ ps.style.display="flex"; ps.style.zIndex="30"; renderPhotos(); if(typeof updateUndoButtons==="function") updateUndoButtons(); }
   else { if(typeof cancelPhotoLine==="function") cancelPhotoLine(); ps.style.display="none"; resize(); }
+  if(typeof updatePhotoSelBar==="function") updatePhotoSelBar();
 }
 byId("tabDiagram").onclick=()=>setPage("diagram");
 byId("tabPhotos").onclick=()=>setPage("photos");
@@ -3533,25 +3580,44 @@ function idbGC(){
 /* PHOTO MARKUP PAGE                                           */
 /* ============================================================ */
 let photoPen={color:"#e01b24",width:7};
+let photoTextSize=32;          // pt for the next callout; A−/A+ changes it
 let photoTool="pen";   // select | pen | line | text
 let photoLine=null;    // {ph, mark, redraw} in-progress polyline
 let photoSelMarks=new Set();  // selected mark references (current photo)
-byId("photoColor").oninput=e=>{ photoPen.color=e.target.value; applyPhotoColorToSelection(); };
-byId("photoWidth").oninput=e=>{ photoPen.width=+e.target.value; applyPhotoWidthToSelection(); };
+/* Redrawing a card in place, instead of rebuilding the page, is what stops the
+   flashing: renderPhotos() blows away every canvas and starts a fresh image
+   decode, so each card renders empty for a frame or two before the photo
+   reappears. Anything that only changes how existing marks look should go
+   through redrawAllPhotos(); renderPhotos() is for when the set of photos or
+   cards actually changes. */
+const photoRedraws=new Map();   // photo id -> that card's redraw fn
+const photoImgCache=new Map();  // photo id -> decoded Image, reused across rebuilds
+function redrawAllPhotos(){ photoRedraws.forEach(fn=>{ try{ fn(); }catch(e){} }); }
+// live preview while dragging, single history entry + save on release
+byId("photoColor").oninput =e=>{ photoPen.color=e.target.value; applyPhotoColorToSelection(false); };
+byId("photoColor").onchange=e=>{ photoPen.color=e.target.value; applyPhotoColorToSelection(true); };
+byId("photoWidth").oninput =e=>{ photoPen.width=+e.target.value; applyPhotoWidthToSelection(false); };
+byId("photoWidth").onchange=e=>{ photoPen.width=+e.target.value; applyPhotoWidthToSelection(true); };
 if(byId("photoUndo")) byId("photoUndo").onclick=()=>undo();
 if(byId("photoRedo")) byId("photoRedo").onclick=()=>redo();
-function applyPhotoColorToSelection(){
+/* `commit` is false while the control is still being dragged (oninput) and true
+   when the user lets go (onchange). Recording history on every input event piled
+   up one undo step per slider pixel and swamped the 80-entry history. */
+function applyPhotoColorToSelection(commit){
   if(photoTool==="select" && photoSelMarks.size){
-    recordHistory();
     photoSelMarks.forEach(m=>{ m.color=photoPen.color; });
-    renderPhotos();
+    if(commit){ recordHistory(); saveLocal(); }
+    redrawAllPhotos();
   }
 }
-function applyPhotoWidthToSelection(){
+function applyPhotoWidthToSelection(commit){
   if(photoTool==="select" && photoSelMarks.size){
     let any=false;
     photoSelMarks.forEach(m=>{ if((m.type||"pen")!=="text"){ m.width=photoPen.width; any=true; } });
-    if(any){ recordHistory(); renderPhotos(); }
+    if(any){
+      if(commit){ recordHistory(); saveLocal(); }
+      redrawAllPhotos();
+    }
   }
 }
 // hit-test a vertex of a selected pen/line mark; returns {mark,idx} or null
@@ -3567,23 +3633,71 @@ function photoVertexHit(ph,p,cw,chh){
   }
   return null;
 }
-function clearPhotoSel(){ if(photoSelMarks.size){ photoSelMarks.clear(); renderPhotos(); } }
+function clearPhotoSel(){ if(photoSelMarks.size){ photoSelMarks.clear(); redrawAllPhotos(); } updatePhotoSelBar(); }
 function deletePhotoSelection(){
   if(!photoSelMarks.size) return;
   recordHistory();
   for(const ph of P.photos){ ph.strokes=(ph.strokes||[]).filter(m=>!photoSelMarks.has(m)); }
-  photoSelMarks.clear(); renderPhotos(); saveLocal();
+  photoSelMarks.clear(); redrawAllPhotos(); saveLocal(); updatePhotoSelBar();
 }
+/* ---- selected-mark actions (edit / resize / delete) ---- */
+function selectedPhotoTexts(){ return [...photoSelMarks].filter(m=>(m.type||"pen")==="text"); }
+function editPhotoText(m){
+  if(!m || (m.type||"pen")!=="text") return;
+  const t=prompt("Edit callout text:", m.text||"");
+  if(t==null) return;
+  recordHistory();
+  if(t.trim()===""){                              // emptying it removes the callout
+    for(const ph of P.photos) ph.strokes=(ph.strokes||[]).filter(x=>x!==m);
+    photoSelMarks.delete(m);
+  } else m.text=t.trim();
+  redrawAllPhotos(); saveLocal(); updatePhotoSelBar();
+}
+// A− / A+ resize the selected callouts; with nothing selected they set the size
+// used for the next one, mirroring how the colour picker behaves.
+function nudgePhotoTextSize(delta){
+  const texts=selectedPhotoTexts();
+  if(texts.length){
+    recordHistory();
+    texts.forEach(m=>{ m.size=Math.max(10,Math.min(200,Math.round((+m.size||32)+delta))); });
+    redrawAllPhotos(); saveLocal();
+  } else {
+    photoTextSize=Math.max(10,Math.min(200,Math.round(photoTextSize+delta)));
+    const h=byId("photoHint"); if(h) h.textContent="New callouts will be "+photoTextSize+"pt.";
+  }
+  updatePhotoSelBar();
+}
+function updatePhotoSelBar(){
+  const bar=byId("photoSelBar"); if(!bar) return;
+  const n=photoSelMarks.size;
+  const show = curPage==="photos" && photoTool==="select" && n>0 && !photoLine;
+  bar.style.display = show ? "flex" : "none";
+  if(!show) return;
+  const texts=selectedPhotoTexts();
+  byId("psEdit").style.display   = texts.length===1 && n===1 ? "" : "none";
+  byId("psSmaller").style.display= texts.length ? "" : "none";
+  byId("psBigger").style.display = texts.length ? "" : "none";
+  byId("psDelLabel").textContent = n>1 ? "Delete ("+n+")" : "Delete";
+}
+(function(){
+  const b=(id,fn)=>{ const el=byId(id); if(el) el.onclick=fn; };
+  b("psDelete",()=>deletePhotoSelection());
+  b("psClear",()=>clearPhotoSel());
+  b("psEdit",()=>{ const t=selectedPhotoTexts()[0]; if(t) editPhotoText(t); });
+  b("psSmaller",()=>nudgePhotoTextSize(-6));
+  b("psBigger",()=>nudgePhotoTextSize(6));
+})();
 function setPhotoTool(t){
   photoTool=t;
   document.querySelectorAll(".ptool").forEach(b=>b.classList.toggle("active",b.dataset.ptool===t));
   const hint=byId("photoHint");
-  if(hint) hint.textContent = t==="select" ? "Select: tap a mark to select; drag it to move, drag its dots to reshape, Delete to remove. Color/width sliders change the selected mark."
+  if(hint) hint.textContent = t==="select" ? "Select: tap a mark, drag to move, drag its dots to reshape. Double-tap a callout to edit it. The bar at the bottom edits, resizes (A−/A+) and deletes."
     : t==="pen" ? "Pen: drag to draw freehand."
     : t==="line" ? "Line: tap each corner; use ✓ Done to finish or ↶ Undo point to step back."
     : "Text: click where you want a callout, then type.";
   cancelPhotoLine();
   if(t!=="select" && photoSelMarks.size){ photoSelMarks.clear(); }
+  updatePhotoSelBar();
   if(curPage==="photos") renderPhotos();
 }
 document.querySelectorAll(".ptool").forEach(b=>b.onclick=()=>setPhotoTool(b.dataset.ptool));
@@ -3610,6 +3724,7 @@ function updatePhotoLineBar(){
   const bar=document.getElementById("photoLineBar");
   if(!bar) return;
   bar.style.display = (photoLine && photoLine.mark && photoLine.mark.pts.length>=1) ? "flex" : "none";
+  if(typeof updatePhotoSelBar==="function") updatePhotoSelBar();
 }
 (function(){
   const d=document.getElementById("plDone"), u=document.getElementById("plUndo");
@@ -3747,6 +3862,9 @@ function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
 function renderPhotos(){
   const scroll=byId("photoScroll");
   scroll.innerHTML="";
+  photoRedraws.clear();                       // the old cards' closures are dead
+  const live=new Set((P.photos||[]).map(p=>p.id));
+  [...photoImgCache.keys()].forEach(k=>{ if(!live.has(k)) photoImgCache.delete(k); });
   if(P.meta.titleImage){
     const tc=document.createElement("div"); tc.className="photo-card title-card";
     tc.innerHTML=`<div class="title-tag">TITLE IMAGE — first page of estimate</div>
@@ -3798,9 +3916,18 @@ function renderPhotos(){
     }
 
     const pctx=cv.getContext("2d");
-    let imLoaded=false; const im=new Image();
-    im.onload=()=>{ imLoaded=true; redrawPhoto(); };
-    im.src=photoSrc(ph.id);
+    // Reuse the decoded image across rebuilds. A fresh Image() per rebuild meant
+    // the card drew empty until the async decode finished — the visible flash.
+    let im=photoImgCache.get(ph.id), imLoaded=false;
+    if(im && im.complete && im.naturalWidth>0){
+      imLoaded=true;        // already decoded — painted synchronously at the end of setup,
+                            // so the card is never shown empty (see the redrawPhoto() below)
+    } else {
+      im=new Image(); photoImgCache.set(ph.id,im);
+      im.onload=()=>{ imLoaded=true; redrawPhoto(); };
+      im.src=photoSrc(ph.id);
+    }
+    photoRedraws.set(ph.id, ()=>redrawPhoto());
     function redrawPhoto(cursor){
       pctx.clearRect(0,0,cw,chh);
       pctx.save();
@@ -3898,7 +4025,7 @@ function renderPhotos(){
       } else if(photoTool==="text"){
         const hit=photoTextAt(ph,p,cw,chh,pctx);
         if(hit){ const t=prompt("Edit callout text:",hit.text); if(t!=null){ if(t.trim()===""){ recordHistory(); ph.strokes.splice(ph.strokes.indexOf(hit),1);} else { recordHistory(); hit.text=t; } redrawPhoto(); saveLocal(); } return; }
-        const t=prompt("Callout text:",""); if(t&&t.trim()){ recordHistory(); ph.strokes.push({type:"text",color:photoPen.color,size:32,x:p.x,y:p.y,text:t.trim()}); redrawPhoto(); saveLocal(); }
+        const t=prompt("Callout text:",""); if(t&&t.trim()){ recordHistory(); ph.strokes.push({type:"text",color:photoPen.color,size:photoTextSize,x:p.x,y:p.y,text:t.trim()}); redrawPhoto(); saveLocal(); }
       }
     });
     cv.addEventListener("pointermove",ev=>{
@@ -3936,7 +4063,7 @@ function renderPhotos(){
         if(Math.abs(x1-x0)>0.005||Math.abs(y1-y0)>0.005){
           for(const st of ph.strokes){ const b=markBoundsN(st,cw,chh,pctx); if(b.x1>=x0&&b.x0<=x1&&b.y1>=y0&&b.y0<=y1) photoSelMarks.add(st); }
         }
-        marq=null; redrawPhoto(); return;
+        marq=null; redrawPhoto(); updatePhotoSelBar(); return;
       }
       if(penStroke){ penStroke=null; recordHistory(); saveLocal(); return; }
       if(lineDown && photoTool==="line"){
@@ -3958,7 +4085,17 @@ function renderPhotos(){
     });
     cv.addEventListener("pointerleave",()=>{ if(penStroke){ penStroke=null; recordHistory(); saveLocal(); } if(vtxDrag){ if(movedFlag){recordHistory();saveLocal();} vtxDrag=null; } if(selDrag){ if(movedFlag){recordHistory();saveLocal();} selDrag=null; } if(marq){ marq=null; redrawPhoto(); } if(lineDown){ lineDown=null; linePreview=null; redrawPhoto(); } });
     cv.addEventListener("pointercancel",ev=>{ if(ev&&cpts.has(ev.pointerId)){ cpts.delete(ev.pointerId); if(cgest&&cpts.size<2) cgest=null; } penStroke=null;selDrag=null;vtxDrag=null;lineDown=null;linePreview=null; });
-    cv.addEventListener("dblclick",()=>{ if(photoTool==="line" && photoLine && photoLine.ph===ph) finishPhotoLine(); });
+    cv.addEventListener("dblclick",(ev)=>{
+      if(photoTool==="line" && photoLine && photoLine.ph===ph){ finishPhotoLine(); return; }
+      // double-tap a callout with Select to edit it, without switching tools
+      if(photoTool==="select"){
+        const p=pos(ev);
+        for(let i=ph.strokes.length-1;i>=0;i--){
+          const st=ph.strokes[i];
+          if((st.type||"pen")==="text" && markHitN(st,p,cw,chh,pctx)){ editPhotoText(st); return; }
+        }
+      }
+    });
     cv.style.cursor = photoTool==="select" ? "default" : "crosshair";
 
     bar.querySelector("[data-zin]").onclick=()=>zoomAt(cw/2,chh/2,1.4);
@@ -3968,10 +4105,15 @@ function renderPhotos(){
     bar.querySelector("[data-undo]").onclick=()=>{ if(photoLine&&photoLine.ph===ph) cancelPhotoLine(); else if(ph.strokes.length){ recordHistory(); ph.strokes.pop(); redrawPhoto(); saveLocal(); } };
     bar.querySelector("[data-clear]").onclick=()=>{ cancelPhotoLine(); if(ph.strokes.length){ recordHistory(); ph.strokes=[]; redrawPhoto(); saveLocal(); } };
     bar.querySelector("[data-del]").onclick=()=>{ cancelPhotoLine(); recordHistory(); P.photos.splice(idx,1); renderPhotos(); saveLocal(); };
+
+    // Paint now if the image was already decoded. This runs last because
+    // redrawPhoto() reads `marq` / `linePreview`, which are declared above but
+    // only initialised further down — calling it any earlier hits their TDZ.
+    if(imLoaded) redrawPhoto();
   });
 }
 // lightweight: re-highlight selection across all cards without full rebuild
-function renderPhotosSelOnly(){ /* selection drawn within each card's redraw; nothing global needed */ }
+function renderPhotosSelOnly(){ /* per-card redraw draws the highlight; just refresh the action bar */ updatePhotoSelBar(); }
 // hit-test a text callout on a photo (normalized coords)
 function photoTextAt(ph,p,cw,chh,pctx){
   for(let i=ph.strokes.length-1;i>=0;i--){
