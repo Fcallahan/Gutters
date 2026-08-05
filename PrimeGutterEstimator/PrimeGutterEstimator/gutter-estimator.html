@@ -177,8 +177,10 @@ input,select,textarea{font-family:inherit;font-size:13px}
 #drawBar button{padding:11px 18px;border-radius:9px;border:0;font-weight:800;font-size:14px;cursor:pointer}
 #drawBar .db-go{background:#1f9d55;color:#fff}
 #drawBar .db-x{background:#3a4d61;color:#dce6ef}
-#selActionBar{position:absolute;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:27;display:flex;gap:8px;background:rgba(20,28,38,.92);padding:8px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.35)}
-#selActionBar button{padding:11px 18px;border-radius:9px;border:0;font-weight:800;font-size:14px;cursor:pointer}
+/* wraps like #photoSelBar: the Delete label grows with the selection ("Delete 2 items + 1
+   segment"), and wrapping the buttons beats letting the text wrap inside one button */
+#selActionBar{position:absolute;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:27;display:flex;flex-wrap:wrap;justify-content:center;width:max-content;max-width:calc(100% - 24px);gap:8px;background:rgba(20,28,38,.92);padding:8px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+#selActionBar button{padding:11px 18px;border-radius:9px;border:0;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
 #selActionBar .db-del{background:#e01b24;color:#fff}
 #selActionBar .db-x{background:#3a4d61;color:#dce6ef}
 #photoLineBar{position:absolute;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:40;display:flex;gap:8px;background:rgba(20,28,38,.94);padding:8px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
@@ -211,19 +213,70 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .tip{position:absolute;left:52px;top:50%;transform:translateY(-50%);background:#0c131b;color:#fff;padding:5px 9px;border-radius:6px;font-size:11.5px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s;font-weight:600}
 .tool:hover .tip{opacity:1}
 
-/* contextual options bar (top of canvas) */
-#optbar{
-  position:absolute;left:64px;top:12px;right:12px;z-index:5;height:42px;
-  background:rgba(255,255,255,.96);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:10px;
-  display:flex;align-items:center;gap:10px;padding:0 12px;box-shadow:0 6px 18px rgba(0,0,0,.16);overflow-x:auto
+/* contextual options bar (top of canvas)
+   The bar always overflows on iPad (the gutter tool alone is ~1160px of controls in a ~430px
+   bar), so #optbarWrap owns the chrome and clips, and #optbar scrolls inside it. That split is
+   what lets the edge fades hold still while the controls scroll underneath them — a fade drawn
+   inside the scroller (::after, or a mask) would either scroll away with the content or eat the
+   bar's own border and shadow.
+   left:78px clears the 54px dock (12+54=66) with the same 12px gutter used elsewhere. */
+#optbarWrap{
+  position:absolute;left:78px;top:12px;right:12px;z-index:5;height:42px;
+  background:#fff;border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 6px 18px rgba(0,0,0,.16);overflow:hidden
 }
+#optbar{
+  position:absolute;inset:0;display:flex;align-items:center;gap:10px;padding:0 12px;
+  overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scroll-padding:0 34px;
+  scrollbar-width:thin
+}
+/* Scroll, never squash. The 1px dividers were silently collapsing to 0 whenever the bar
+   overflowed (i.e. always, on iPad) because an empty div has 0 min-content width. */
+#optbar > *{flex:0 0 auto}
 #optbar .ob-title{font-weight:800;font-size:12px;color:var(--prime);letter-spacing:.3px;white-space:nowrap}
 #optbar .ob-grp{display:flex;align-items:center;gap:6px;white-space:nowrap}
-#optbar .ob-grp label{font-size:11px;font-weight:700;color:var(--text-soft)}
+#optbar .ob-grp label{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--text-soft)}
+#optbar .mini{margin-top:0;white-space:nowrap}
 #optbar select,#optbar input{padding:5px 7px;border:1px solid var(--line);border-radius:6px}
 #optbar .div{width:1px;height:22px;background:var(--line)}
+/* 6px, not the global 10px, which was eating a quarter of the bar's inner height */
+#optbar::-webkit-scrollbar{height:6px}
+#optbar::-webkit-scrollbar-track{background:transparent}
+#optbar::-webkit-scrollbar-thumb{background:#c2cbd4;border:0;border-radius:3px}
+
+/* edge fades — shown only on the side that still has more to reach */
+.ob-fade{position:absolute;top:0;bottom:0;width:34px;pointer-events:none;z-index:2;opacity:0;transition:opacity .15s}
+.ob-fade-l{left:0;background:linear-gradient(to left,rgba(255,255,255,0),#fff 60%);box-shadow:inset 10px 0 8px -8px rgba(0,0,0,.22)}
+.ob-fade-r{right:0;background:linear-gradient(to right,rgba(255,255,255,0),#fff 60%);box-shadow:inset -10px 0 8px -8px rgba(0,0,0,.22)}
+#optbarWrap.can-l .ob-fade-l,#optbarWrap.can-r .ob-fade-r{opacity:1}
+
 .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-weight:700;font-size:11.5px;cursor:pointer;background:#fff;color:var(--text)}
 .chip.on{background:var(--prime);color:#fff;border-color:var(--prime-dark)}
+
+/* Touch (iPad) only — the mouse layout stays dense.
+   16px on the inputs is for legibility, not zoom: the viewport meta already pins the scale and
+   WebView.swift never sets ignoresViewportScaleLimits, so WKWebView honours it.
+   The !important rules beat inline style="width:60px" / "width:40px;height:28px" attributes. */
+@media (pointer:coarse){
+  #optbarWrap{height:52px}
+  #optbar{gap:14px;padding:0 14px;scroll-padding:0 40px;scrollbar-width:none}
+  #optbar::-webkit-scrollbar{display:none}
+  #optbar .ob-title{font-size:13px}
+  #optbar .ob-grp{gap:9px}
+  #optbar .ob-grp label{font-size:13px;gap:7px}
+  #optbar .div{height:30px}
+  #optbar .swatch{width:19px;height:19px}
+  #optbar .mini{display:none}          /* the same sentence already shows in #hint */
+  #optbar select,
+  #optbar input[type=number],
+  #optbar input[type=text]{font-size:16px;padding:8px 10px;border-radius:8px}
+  #optbar input[type=number]{width:80px!important}
+  #optbar input[type=color]{width:54px!important;height:36px!important}
+  #optbar input[type=range]{height:36px;width:150px}
+  #optbar input[type=checkbox]{width:22px;height:22px;accent-color:var(--prime);margin:0}
+  #optbar .chip{padding:9px 14px;font-size:14px;border-radius:9px;min-height:40px}
+  .ob-fade{width:40px}
+}
 
 /* zoom + status */
 #statusbar{
@@ -292,7 +345,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .rail-scroll::-webkit-scrollbar-thumb{background:#c2cbd4;border-radius:6px;border:2px solid var(--rail);background-clip:content-box}
 
 @media print{
-  #topbar,#optionsBar,#dock,#optbar,#statusbar,#hint,#rail .rail-tabs,#photoBar{display:none!important}
+  #topbar,#optionsBar,#dock,#optbarWrap,#statusbar,#hint,#rail .rail-tabs,#photoBar{display:none!important}
 }
 </style>
 </head>
@@ -358,8 +411,12 @@ input,select,textarea{font-family:inherit;font-size:13px}
       <!-- tool dock -->
       <div id="dock"></div>
 
-      <!-- contextual options -->
-      <div id="optbar"></div>
+      <!-- contextual options (the wrapper clips and holds the edge fades; #optbar is the scroller) -->
+      <div id="optbarWrap">
+        <div id="optbar"></div>
+        <div class="ob-fade ob-fade-l"></div>
+        <div class="ob-fade ob-fade-r"></div>
+      </div>
 
       <!-- finish/cancel an in-progress run (no keyboard needed on iPad) -->
       <div id="drawBar" style="display:none">
@@ -542,7 +599,7 @@ function defaultProject(){
       bayDeviation:15,            // degrees from 90 to call a bay miter
       straightMax:165,            // >this interior angle = treated as straight (no corner)
       autoMeasure:false,          // auto-fill segment lengths from drawn scale
-      feetPerSquare:5,            // feet represented by one grid square when auto-measuring
+      feetPerSquare:2,            // feet represented by one grid square when auto-measuring
       customProducts:[],          // [{id,name,pricePerFoot,color,mode}] user-defined products; mode: line|demo|screen
       pricingMode:"itemized",     // flat | itemized
       flatGutterRate:9,
@@ -676,6 +733,7 @@ function resize(){
   view.w = w; view.h = h;
   canvas.width = Math.round(w*DPR);
   canvas.height= Math.round(h*DPR);
+  updateOptbarFades();   // rail toggle / rotation / split view can all end the overflow
   draw();
 }
 window.addEventListener("resize",resize);
@@ -687,6 +745,11 @@ if(window.ResizeObserver){
   const stageEl = document.getElementById("stage");
   if(stageEl) ro.observe(stageEl);
 }
+// #optbar is never replaced (only its innerHTML), so one listener covers every rebuild
+(function(){
+  const ob = document.getElementById("optbar");
+  if(ob) ob.addEventListener("scroll", updateOptbarFades, {passive:true});
+})();
 
 function worldToScreen(p){ return {x:(p.x-cam.x)*cam.scale, y:(p.y-cam.y)*cam.scale}; }
 function screenToWorld(p){ return {x:p.x/cam.scale+cam.x, y:p.y/cam.scale+cam.y}; }
@@ -1733,7 +1796,7 @@ let gutterExtend=null; // {runId, end:0|1} when extending an existing run
 let cursorW=null;      // world cursor
 let marquee=null;
 let snap=true;
-let angleSnap=false;
+let angleSnap=true;
 let hlColor="#ffe24d", hlWidth=18;
 let demoColor="#ff3b30", demoWidth=20;                 // Demo highlight defaults
 let screenColor="#34c759", screenWidth=20;             // Gutter-screen highlight defaults
@@ -1832,7 +1895,10 @@ function setTool(id){
 }
 function toolHint(t){
   return ({
-    select:"Tap to select a run • drag to move • drag the dots to adjust corners • tap a selected run again to pick one segment, then Delete to remove just it • drag any label (footage, downspout note, 3×4 tag) to reposition it, double-tap it to snap back • Delete removes",
+    // Kept short on purpose — this one is always on screen. The box-selection nuance (whole run
+    // vs. just the crossed segments) and label snap-back are explained contextually instead, by
+    // the post-marquee hint and the downspout/label hints, right when they matter.
+    select:"Tap to select • drag to move • drag the dots to adjust corners • box-drag to grab several • Delete removes",
     hand:"Drag to pan the diagram",
     gutter:"Drag to draw a run, lift to finish • start on an existing end (green ring) to add a corner • (mouse: click corners, then ✓ Finish)",
     ds:"Tap to drop a downspout • then type its run, e.g. \"AAA 20\" — 1 outlet is automatic • change its color any time via Select",
@@ -1852,6 +1918,16 @@ function setHint(t){ const h=document.getElementById("hint"); if(t){h.textConten
 /* ---------- contextual options bar ---------- */
 function colorOptions(sel,brand){
   return brandColorList(brand).map(c=>'<option value="'+c.n+'"'+(c.n===sel?" selected":"")+'>'+c.n+'</option>').join("");
+}
+/* The options bar almost always overflows on iPad, and iOS draws no scrollbar for touch
+   overflow — so fade whichever end still has more to reach. The ±1 absorbs subpixel
+   scrollWidth rounding, which otherwise leaves the right fade stuck on at the far end. */
+function updateOptbarFades(){
+  const ob=document.getElementById("optbar"); if(!ob) return;
+  const wrap=ob.parentNode; if(!wrap||!wrap.classList) return;
+  const max=ob.scrollWidth-ob.clientWidth;
+  wrap.classList.toggle("can-l", ob.scrollLeft>1);
+  wrap.classList.toggle("can-r", ob.scrollLeft<max-1);
 }
 function buildOptbar(){
   const ob=document.getElementById("optbar");
@@ -1981,8 +2057,17 @@ function buildOptbar(){
   } else {
     h+='<span class="ob-title">PAN</span>'+dv+'<span class="mini" style="color:var(--text-soft)">Drag to move around the diagram</span>';
   }
+  // Hold the scroll offset across in-tool rebuilds — changing Brand or ticking Eraser re-renders
+  // the whole bar, and snapping back to 0 would yank away the control just used. Switching to a
+  // different tool does start at the beginning. Every branch emits exactly one .ob-title, so its
+  // text is a reliable identity key (it even changes per custom product).
+  const oldTitle=ob.querySelector(".ob-title"), oldLeft=ob.scrollLeft;
+  const oldKey=oldTitle?oldTitle.textContent:"";
   ob.innerHTML=h;
   wireOptbar();
+  const newTitle=ob.querySelector(".ob-title");
+  ob.scrollLeft=((newTitle?newTitle.textContent:"")===oldKey)?oldLeft:0;
+  updateOptbarFades();
 }
 function wireOptbar(){
   const byId=id=>document.getElementById(id);
@@ -2427,8 +2512,12 @@ function onDown(e){
         press={pt,mode:"moveLabel",hit,startOff,moved:false};
       }else{
         // tapping a chip edits it (handled in onUp); dragging it moves the whole run.
-        // capture clones so a drag moves the hit object (and anything already selected)
-        const moveIds=new Set(sel); moveIds.add(hit.objId);
+        // Capture clones so a drag moves the hit object and everything else selected. Runs the
+        // marquee picked up live in segSel, not sel — leaving them out of this set is what used
+        // to strand box-selected runs (they drew as selected, then stayed put on the drag).
+        const moveIds=new Set(sel);
+        segSel.forEach(k=>moveIds.add(parseSegKey(k).objId));
+        moveIds.add(hit.objId);
         const ids=[...moveIds];                       // keep real id values (numbers)
         const clones={}; ids.forEach(id=>{ const ob=objById(id); if(ob) clones[id]=JSON.parse(JSON.stringify(ob)); });
         press={pt,mode:"maybeMove",hit,ids,clones,moved:false};
@@ -2619,6 +2708,7 @@ function onUp(e){
     } else if(press.mode==="marquee"){
       selectInMarquee(marquee); marquee=null;
       if(segSel.size) setHint(segSel.size+" segment"+(segSel.size>1?"s":"")+" selected — Delete removes "+(segSel.size>1?"them":"it")+". Box-drag a whole run to select all of it.");
+      else if(sel.size) setHint(sel.size+" item"+(sel.size>1?"s":"")+" selected — drag any one of them to move the whole selection • Delete removes "+(sel.size>1?"them":"it")+".");
     }
     press=null; draw(); refreshSelInfo(); return;
   }
@@ -2629,9 +2719,17 @@ function onUp(e){
     const upPt=evtPos(e);
     const moved = drawDownPt ? Math.hypot(upPt.x-drawDownPt.x, upPt.y-drawDownPt.y) : 0;
     if(moved>10){
-      const w=screenToWorld(upPt);
-      if(drawing.t==="gutter"){ const hit=findGutterEndNear(w); drawing.pts.push(hit?{x:hit.pt.x,y:hit.pt.y}:snapW(w)); finishGutter(); }
-      else { drawing.pts.push(snapW(w)); finishCustom(); }
+      // Commit the point the rubber-band was already showing (cursorW), not the pointerup
+      // coordinate. Two things used to shift the end on lift:
+      //   • the contact patch rolls as a finger leaves the glass, so pointerup reports a few px
+      //     off the last pointermove — grid snap quantised that away, which is why the drift
+      //     only showed up with snapping off;
+      //   • this path skipped the 22.5° angle snap the preview applies, so an angle-snapped
+      //     line visibly un-snapped the instant you lifted.
+      const prev=drawing.pts[drawing.pts.length-1];
+      const w=cursorW||snapAngleW(snapW(screenToWorld(upPt)),prev);
+      if(drawing.t==="gutter"){ const hit=findGutterEndNear(w); drawing.pts.push(hit?{x:hit.pt.x,y:hit.pt.y}:{x:w.x,y:w.y}); finishGutter(); }
+      else { drawing.pts.push({x:w.x,y:w.y}); finishCustom(); }
     } else { cancelDrawing(); }   // a tap that didn't drag = nothing placed
     updateDrawBar(); return;
   }
@@ -2786,12 +2884,31 @@ function onWheel(e){
   };
 })();
 
+/* The hint pill and the Finish / Delete bars are all pinned bottom-centre, and the bars sit on
+   top (z-index 27 vs 5), so they used to cover the hint outright. Lift the hint clear of
+   whichever bar is showing — measured from the live rects rather than hard-coded, because the
+   Delete label grows with the selection and the bar can wrap to a second row. */
+function layoutHint(){
+  const hint=document.getElementById("hint"), stage=document.getElementById("stage");
+  if(!hint||!stage) return;
+  const sr=stage.getBoundingClientRect();
+  let lift=0;
+  ["drawBar","selActionBar"].forEach(id=>{
+    const b=document.getElementById(id);
+    if(!b||b.style.display==="none") return;
+    const br=b.getBoundingClientRect();
+    if(br.height) lift=Math.max(lift, sr.bottom-br.top+10);   // 10px gap above the bar
+  });
+  hint.style.bottom = lift ? lift+"px" : "";                  // "" falls back to the CSS 14px
+}
+
 // finish/cancel an in-progress gutter or custom run (touch-friendly)
 function updateDrawBar(){
   const bar=document.getElementById("drawBar");
   if(!bar) return;
   const show = !!(drawing && (drawing.t==="gutter"||(drawing.t==="custom"&&!drawing.stroke)) && drawing.pts && drawing.pts.length>=1);
   bar.style.display = show ? "flex" : "none";
+  layoutHint();
 }
 (function(){
   const fin=document.getElementById("drawFinish"), can=document.getElementById("drawCancel");
@@ -2806,17 +2923,30 @@ function updateSelActionBar(){
   if(show){
     const lab=document.getElementById("selDelLabel");
     if(lab){
-      if(segSel.size) lab.textContent="Delete "+segSel.size+" segment"+(segSel.size>1?"s":"");
-      else lab.textContent="Delete "+sel.size+" item"+(sel.size>1?"s":"");
+      // a marquee can leave both kinds selected (whole runs in sel, partly-crossed runs in
+      // segSel) — report both, or the button under-counts what Delete actually removes
+      const parts=[];
+      if(sel.size) parts.push(sel.size+" item"+(sel.size>1?"s":""));
+      if(segSel.size) parts.push(segSel.size+" segment"+(segSel.size>1?"s":""));
+      lab.textContent="Delete "+parts.join(" + ");
     }
   }
+  layoutHint();   // after the label is set — its length can change the bar's height
 }
 function selectInMarquee(m){
   const r={x0:Math.min(m.x0,m.x1),y0:Math.min(m.y0,m.y1),x1:Math.max(m.x0,m.x1),y1:Math.max(m.y0,m.y1)};
   for(const o of P.objects){
     if((o.t==="gutter"||(o.t==="custom"&&!o.stroke))&&o.pts){
       const ps=o.pts.map(worldToScreen);
-      for(let i=0;i<ps.length-1;i++){ if(segIntersectsRect(ps[i],ps[i+1],r)) segSel.add(segKey(o.id,i)); }
+      const inR=p=>p.x>=r.x0&&p.x<=r.x1&&p.y>=r.y0&&p.y<=r.y1;
+      if(ps.length&&ps.every(inR)){
+        // the box eclipses the whole run — select the run itself rather than a pile of
+        // segments, so the count, the Delete label and a drag all treat it as one thing
+        sel.add(o.id);
+        for(let i=0;i<ps.length-1;i++) segSel.delete(segKey(o.id,i));
+      } else {
+        for(let i=0;i<ps.length-1;i++){ if(segIntersectsRect(ps[i],ps[i+1],r)) segSel.add(segKey(o.id,i)); }
+      }
     } else if((o.t==="hl"||o.t==="demo"||o.t==="screen"||(o.t==="custom"&&o.stroke))&&o.pts){
       // highlight strokes select only when the marquee actually touches the painted PATH,
       // not its bounding box — so you can box items inside a closed/wide highlight without
