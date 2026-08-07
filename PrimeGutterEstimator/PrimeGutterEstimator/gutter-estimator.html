@@ -3751,17 +3751,27 @@ function applyPhotoWidthToSelection(commit){
   }
 }
 // hit-test a vertex of a selected pen/line mark; returns {mark,idx} or null
-function photoVertexHit(ph,p,cw,chh){
-  const thr=12; // px
+function photoVertexHit(ph,p,cw,chh,scale,ptrType){
+  // thr is a screen-px radius (matches the constant-size handle drawn at 5/V.s),
+  // so it has to shrink by the zoom scale here rather than staying flat — a flat
+  // px threshold in image space ballooned into a huge screen-space grab area
+  // once you zoomed in, which is how a nearby point kept stealing the drag.
+  const thr=(ptrType==="touch"?16:10)/(scale||1);
+  let best=null, bestD=Infinity;
   for(const m of ph.strokes){
     if(!photoSelMarks.has(m)) continue;
     if((m.type||"pen")==="text" || !m.pts) continue;
     for(let i=0;i<m.pts.length;i++){
       const dx=(m.pts[i].x-p.x)*cw, dy=(m.pts[i].y-p.y)*chh;
-      if(Math.hypot(dx,dy)<=thr) return {mark:m,idx:i};
+      const d=Math.hypot(dx,dy);
+      // closest point wins, not first-found — with two vertices inside the
+      // threshold (a short segment, or points from two selected marks
+      // overlapping) this used to always grab whichever came first in
+      // ph.strokes instead of the one actually under the cursor.
+      if(d<=thr && d<bestD){ best={mark:m,idx:i}; bestD=d; }
     }
   }
-  return null;
+  return best;
 }
 function clearPhotoSel(){ if(photoSelMarks.size){ photoSelMarks.clear(); redrawAllPhotos(); } updatePhotoSelBar(); }
 function deletePhotoSelection(){
@@ -4128,7 +4138,7 @@ function renderPhotos(){
       if(photoTool==="select"){
         cv.setPointerCapture(ev.pointerId);
         // grab a vertex handle of an already-selected line/pen first
-        const vh=photoVertexHit(ph,p,cw,chh);
+        const vh=photoVertexHit(ph,p,cw,chh,V.s,ev.pointerType);
         if(vh){ vtxDrag=vh; movedFlag=false; return; }
         // topmost mark under cursor
         let hit=null;
