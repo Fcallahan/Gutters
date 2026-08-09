@@ -146,7 +146,11 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .totline{display:flex;justify-content:space-between;align-items:center;padding:9px 11px;border-radius:8px;margin-top:9px;font-weight:700}
 .totline.foot{background:#eef3f8;border:1px solid #dbe6f1}
 .totline.grand{background:var(--ink);color:#fff;font-size:16px}
+.totline.disc{background:#fdecee;border:1px solid #f5c2c7;color:var(--prime)}
 .totline .v{font-family:var(--mono)}
+/* a charged rate sitting on its minimum $/ft */
+.ws-row input.ws-price.at-min{background:#fff4e5;color:#a35a00;font-weight:700}
+.min-pill{background:var(--orange);color:#fff;font-size:8.5px;font-weight:800;border-radius:3px;padding:1px 4px}
 .mini{font-size:10.5px;color:var(--text-soft);margin-top:2px}
 
 .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:800;letter-spacing:.3px}
@@ -598,12 +602,22 @@ function defaultProject(){
       endCapsPerRun:2,
       bayDeviation:15,            // degrees from 90 to call a bay miter
       straightMax:165,            // >this interior angle = treated as straight (no corner)
-      autoMeasure:false,          // auto-fill segment lengths from drawn scale
+      autoMeasure:true,           // auto-fill segment lengths from drawn scale
       feetPerSquare:2,            // feet represented by one grid square when auto-measuring
       customProducts:[],          // [{id,name,pricePerFoot,color,mode}] user-defined products; mode: line|demo|screen
       pricingMode:"itemized",     // flat | itemized
       flatGutterRate:9,
       flatDownspoutRate:9,
+      // Discount pricing: listPrices is the standard $/ft the discount % is measured against,
+      // minPrices is a hard floor the charged rate can never drop below (0 = no floor).
+      // Both are keyed by style price key (STYLE_PRICE_KEYS); seeded in ensurePrices().
+      listPrices:{},
+      minPrices:{},
+      discountName:"",            // e.g. "Military", "Senior" — labels the discount row ("" = plain "Discount")
+      flatGutterList:null,        // null = seed from the charged rate, so old jobs open at 0% off
+      flatDownspoutList:null,
+      flatGutterMin:0,
+      flatDownspoutMin:0,
       demoRate:0,                 // $/ft for the Demo highlight tool (footage rounds up to whole ft)
       screenEzRate:0,             // $/ft — EZ Lock gutter screen (footage rounds up to mult of 4)
       screenEavRate:0,            // $/ft — Eav N Flow gutter screen
@@ -642,12 +656,22 @@ const STYLE_DEFAULTS = {
   gutter5:10, gutter6:10.5, gutter6hr:16, gutter7:15,
   ds2x3:10, ds3x4:10.5, ds4round:14.5, ds4x5:29,
 };
+// Company floor per style $/ft — the lowest a rep may discount to. Editable per job under
+// Pricing; 0 means no floor.
+const MIN_DEFAULTS = {
+  gutter5:9, gutter6:9.5, gutter6hr:15, gutter7:14,
+  ds2x3:9, ds3x4:9.5, ds4round:13.5, ds4x5:28.53,
+};
 const DS_STYLES = [
   {id:"2x3",    label:'2"×3"',      short:'2×3',      priceKey:"ds2x3",    outletKey:"outlet2x3",    elbowKey:"elbow2x3",    offsetKey:"offset2x3"},
   {id:"3x4",    label:'3"×4"',      short:'3×4',      priceKey:"ds3x4",    outletKey:"outlet3x4",    elbowKey:"elbow3x4",    offsetKey:"offset3x4"},
   {id:"4round", label:'4" Round',   short:'4″ Round', priceKey:"ds4round", outletKey:"outlet4round", elbowKey:"elbow4round", offsetKey:"offset4round"},
   {id:"4x5",    label:'4"×5"',      short:'4×5',      priceKey:"ds4x5",    outletKey:"outlet4x5",    elbowKey:"elbow4x5",    offsetKey:"offset4x5"},
 ];
+// The only rates a discount applies to — everything else prices the same at list and charged.
+// Their AUTO components (end caps, miters, outlets, elbows, offsets, valley) follow along
+// because syncStylePricing derives those from these rates.
+const STYLE_PRICE_KEYS = [...GUTTER_STYLES.map(g=>g.priceKey), ...DS_STYLES.map(d=>d.priceKey)];
 function gutterStyle(id){ return GUTTER_STYLES.find(g=>g.id===id) || GUTTER_STYLES[1]; } // default 6K
 function dsStyle(id){ return DS_STYLES.find(d=>d.id===id) || DS_STYLES[1]; }            // default 3x4
 
@@ -679,8 +703,10 @@ const DERIVED_KEYS = new Set([
 // that style's $/ft. End caps/outlets/valley shields are gutter material (priced from the
 // gutter style, multiplied by their LF allowance); elbows/offsets are downspout material;
 // miters match the gutter $/ft 1:1.
-function syncStylePricing(){
-  const p=P.settings.prices, s=P.settings;
+// Takes the price map to work on so the same derivation can run over a LIST price map
+// (see listPriceMap) as well as the live one. Defaults to the live map.
+function syncStylePricing(p){
+  p = p || P.settings.prices; const s=P.settings;
   const jobG = +p[gutterStyle(s.gutterType).priceKey]||0;   // job gutter $/ft drives shared gutter-material parts
   GUTTER_STYLES.forEach(g=>{
     const base=+p[g.priceKey]||0;
@@ -706,8 +732,71 @@ function ensurePrices(){
   if(p.splashConcrete==null) p.splashConcrete=30;
   // anything not seeded yet defaults to 0
   PRICE_KEYS.forEach(k=>{ if(p[k]==null) p[k]=0; });
+
+  // --- discount baselines ---------------------------------------------------
+  // List $/ft seeds from whatever rate the job is already using (NOT from STYLE_DEFAULTS),
+  // so every job saved before this feature existed opens showing 0% discount.
+  const s=P.settings;
+  const L = s.listPrices = s.listPrices || {};
+  const M = s.minPrices  = s.minPrices  || {};
+  for(const k of STYLE_PRICE_KEYS){
+    if(L[k]==null) L[k] = (p[k]!=null ? +p[k]||0 : (+STYLE_DEFAULTS[k]||0));
+    // Seeding a floor must never reprice a job that was quoted before floors existed:
+    // grandfather anything already below the company default down to its own rate.
+    // A new project can't hit this — every STYLE_DEFAULT sits above its MIN_DEFAULT.
+    if(M[k]==null) M[k] = Math.min(+MIN_DEFAULTS[k]||0, +p[k]||0);
+  }
+  if(s.flatGutterList==null)    s.flatGutterList    = +s.flatGutterRate||0;
+  if(s.flatDownspoutList==null) s.flatDownspoutList = +s.flatDownspoutRate||0;
+
+  // --- hard floor -----------------------------------------------------------
+  // Enforced here rather than only in the input handlers, so it also covers imported JSON,
+  // duplicated options, and raising a minimum above rates already saved on the job.
+  for(const k of STYLE_PRICE_KEYS){
+    const min=+M[k]||0;
+    if((+p[k]||0) < min) p[k]=min;
+    if((+L[k]||0) < min) L[k]=min;
+  }
+  if((+s.flatGutterRate||0)    < (+s.flatGutterMin||0))    s.flatGutterRate    = +s.flatGutterMin||0;
+  if((+s.flatDownspoutRate||0) < (+s.flatDownspoutMin||0)) s.flatDownspoutRate = +s.flatDownspoutMin||0;
+  if((+s.flatGutterList||0)    < (+s.flatGutterMin||0))    s.flatGutterList    = +s.flatGutterMin||0;
+  if((+s.flatDownspoutList||0) < (+s.flatDownspoutMin||0)) s.flatDownspoutList = +s.flatDownspoutMin||0;
+
   // derive all style-related component prices from the style $/ft
   syncStylePricing();
+}
+
+// Full price map at LIST rates: style $/ft come from settings.listPrices; everything else
+// (leaf guard, splash blocks, diverters) is not discounted and carries over unchanged.
+// The AUTO components are re-derived so end caps / miters / outlets / elbows follow list too.
+function listPriceMap(){
+  const p=Object.assign({}, P.settings.prices), L=P.settings.listPrices||{};
+  for(const k of STYLE_PRICE_KEYS){ if(L[k]!=null) p[k]=+L[k]||0; }
+  syncStylePricing(p);
+  return p;
+}
+
+// Hard floor: a style rate can never be stored below its configured minimum $/ft.
+// Returns what was actually stored so the caller can repaint the input.
+function setStyleRate(key,val){
+  ensurePrices();
+  const min=+(P.settings.minPrices||{})[key]||0;
+  const want=+val||0;
+  const v=Math.max(want,min);
+  P.settings.prices[key]=v;
+  return {value:v, clamped:v>want+1e-9};
+}
+// Label for the discount row. A rep types "Military" / "Fire & EMS" / "Senior" and we append
+// "Discount" unless they already wrote it themselves; blank falls back to plain "Discount".
+function discountLabel(s){
+  const n=((s||P.settings).discountName||"").trim();
+  if(!n) return "Discount";
+  return /discount$/i.test(n) ? n : n+" Discount";
+}
+// Is this style's charged rate sitting on its floor?
+function rateAtMin(key){
+  const min=+(P.settings.minPrices||{})[key]||0;
+  return min>0 && (+P.settings.prices[key]||0) <= min+1e-9;
 }
 
 /* ============================================================ */
@@ -1092,22 +1181,35 @@ function compute(){
     + elbowsTot*(+s.footagePerElbow||0)
     + offsetsTot*(+s.footagePerOffset||0);
 
-  // amounts (itemized) — one line per priced component
-  const pr=s.prices;
-  const amt={};
-  for(const k of PRICE_KEYS){ amt[k]=(q[k]||0)*(+pr[k]||0); }
-  const itemizedSub = Object.values(amt).reduce((a,b)=>a+b,0);
-
-  const leafAmount = q.leaf6*pr.leaf6 + q.leaf5*pr.leaf5;
-  const splashAmount = q.splashPlastic*(+pr.splashPlastic||0) + q.splashConcrete*(+pr.splashConcrete||0);
-  let turnkey;
-  if(s.pricingMode==="flat"){
-    turnkey = gutterFootage*(+s.flatGutterRate||0) + dsFootage*(+s.flatDownspoutRate||0)
-              + leafAmount + splashAmount + customTotal + addOns + (+s.miscDemoLabor||0);
-  }else{
-    turnkey = itemizedSub + customTotal + addOns + (+s.miscDemoLabor||0);
+  // Price the same takeoff twice — once at the rates we're charging, once at list rates —
+  // so the estimate can show the discount as a percentage of the standard price.
+  // Only the gutter/downspout $/ft differ between the two passes; leaf guard, splash blocks,
+  // diverters, screens, demo, custom products and Misc/Labor price identically in both.
+  function priceAt(p,flatGut,flatDs){
+    const amt={};
+    for(const k of PRICE_KEYS){ amt[k]=(q[k]||0)*(+p[k]||0); }
+    const itemizedSub = Object.values(amt).reduce((a,b)=>a+b,0);
+    const leafAmount = q.leaf6*(+p.leaf6||0) + q.leaf5*(+p.leaf5||0);
+    const splashAmount = q.splashPlastic*(+p.splashPlastic||0) + q.splashConcrete*(+p.splashConcrete||0);
+    let turnkey;
+    if(s.pricingMode==="flat"){
+      turnkey = gutterFootage*(+flatGut||0) + dsFootage*(+flatDs||0)
+                + leafAmount + splashAmount + customTotal + addOns + (+s.miscDemoLabor||0);
+    }else{
+      turnkey = itemizedSub + customTotal + addOns + (+s.miscDemoLabor||0);
+    }
+    return {amt,itemizedSub,leafAmount,splashAmount,turnkey};
   }
+  const charged = priceAt(s.prices, s.flatGutterRate, s.flatDownspoutRate);
+  const list    = priceAt(listPriceMap(), s.flatGutterList, s.flatDownspoutList);
+  const {amt,itemizedSub,leafAmount,splashAmount,turnkey} = charged;
 
+  const listTurnkey = list.turnkey;
+  const discountAmt = Math.max(0, listTurnkey - turnkey);   // an upcharge is not a discount
+  const hasDiscount = discountAmt>0.005 && listTurnkey>0;
+  const discountPct = hasDiscount ? discountAmt/listTurnkey*100 : 0;
+
+  // Card fee, deposit and balance all follow the DISCOUNTED turnkey — we bill what we charge.
   const cardFee = s.payMethod==="card" ? turnkey*(+s.cardFee||0)/100 : 0;
   const grand = turnkey + cardFee;
   const deposit = grand*(+s.depositPct||0)/100;
@@ -1116,7 +1218,8 @@ function compute(){
   return {q,amt,corners,outlets,gutterFootage,dsFootage,itemizedSub,leafAmount,splashAmount,
           customRows,customTotal,customFootage,
           demoFeet,demoAmount,screenRows,screenTotal,
-          turnkey,cardFee,grand,deposit,remaining};
+          turnkey,listTurnkey,discountAmt,discountPct,hasDiscount,
+          cardFee,grand,deposit,remaining};
 }
 
 function money(n){ return "$"+(Math.round((+n||0)*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -3252,7 +3355,8 @@ function buildEstimatePane(){
       const price=P.settings.prices[L.key]||0;
       const derived=DERIVED_KEYS.has(L.key);
       const attrs=derived?` readonly tabindex="-1" title="Auto-priced from the gutter / downspout style — edit under Pricing" style="color:var(--text-soft)"`:"";
-      h+=`<input class="ws-price" data-price="${L.key}" value="${price}"${attrs} inputmode="decimal">`;
+      const atMin=!derived&&rateAtMin(L.key);
+      h+=`<input class="ws-price${atMin?" at-min":""}" data-price="${L.key}" value="${price}"${atMin?` title="At the minimum $${money(P.settings.minPrices[L.key]).slice(1)}/ft — set under Pricing"`:""}${attrs} inputmode="decimal">`;
       h+=`<div class="ws-amt">${money(r.amt[L.key]||0)}</div>`;
     }
     h+=`</div>`;
@@ -3284,6 +3388,10 @@ function buildEstimatePane(){
   } else {
     h+=`<div class="totline foot"><span>Itemized subtotal</span><span class="v">${money(r.itemizedSub)}</span></div>`;
   }
+  if(r.hasDiscount){
+    h+=`<div class="totline foot"><span>Standard price</span><span class="v">${money(r.listTurnkey)}</span></div>`;
+    h+=`<div class="totline disc"><span>${esc(discountLabel())} (${r1(r.discountPct)}%)</span><span class="v">−${money(r.discountAmt)}</span></div>`;
+  }
   if((+P.settings.miscDemoLabor||0)!==0)
     h+=`<div class="totline foot"><span>Misc / Demo / Labor</span><span class="v">${money(P.settings.miscDemoLabor)}</span></div>`;
   if(P.settings.payMethod==="card" && r.cardFee>0)
@@ -3302,7 +3410,13 @@ function buildEstimatePane(){
   });
   pane.querySelectorAll("input.ws-price").forEach(inp=>{
     if(inp.hasAttribute("readonly")) return;   // AUTO components are derived from the style $/ft
-    inp.onchange=()=>{ ensurePrices(); P.settings.prices[inp.dataset.price]=+inp.value||0; refreshAll(); };
+    inp.onchange=()=>{
+      // setStyleRate applies the minimum $/ft floor; show the snap-back rather than
+      // silently storing something different from what's on screen.
+      const res=setStyleRate(inp.dataset.price, inp.value);
+      if(res.clamped) inp.value=res.value;
+      refreshAll();
+    };
   });
 }
 
@@ -3360,25 +3474,41 @@ function buildPricingPane(){
   h+=`<div class="sec-h">Pricing mode</div>`;
   h+=`<div class="seg-toggle"><button data-mode="flat" class="${flat?"on":""}">Flat $/ft</button><button data-mode="itemized" class="${flat?"":"on"}">Itemized</button></div>`;
 
-  // Per-style $/ft — always editable, independent of pricing mode
+  // Per-style $/ft — always editable, independent of pricing mode.
+  // Three columns: List (standard rate the discount % is measured against), Min (hard floor),
+  // and Your (what we're actually charging).
+  const RATECOLS="grid-template-columns:1fr 58px 58px 58px";
+  const rateRow=(label,key)=>{
+    const atMin=rateAtMin(key);
+    return `<div class="ws-row" style="${RATECOLS}">`
+      + `<div class="ws-lbl">${label}${atMin?' <span class="min-pill">MIN</span>':''}</div>`
+      + `<input class="ws-price" data-list="${key}" value="${s.listPrices[key]||0}" inputmode="decimal" title="Standard (list) $/ft">`
+      + `<input class="ws-price" data-min="${key}" value="${s.minPrices[key]||0}" inputmode="decimal" title="Minimum $/ft — the charged rate can't go below this">`
+      + `<input class="ws-price${atMin?" at-min":""}" data-price="${key}" data-cascade="1" value="${s.prices[key]||0}" inputmode="decimal" title="What we're charging">`
+      + `</div>`;
+  };
+  const rateHead=(first)=>`<div class="ws-head" style="${RATECOLS}"><div>${first}</div><div>List</div><div>Min</div><div>Your</div></div>`;
   h+=`<div class="sec-h">Gutter style pricing <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ / ft</span></div>`;
-  h+=`<div class="worksheet"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Style</div><div>$ / ft</div></div>`;
-  for(const gst of GUTTER_STYLES){
-    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${gst.label}</div><input class="ws-price" data-price="${gst.priceKey}" data-cascade="1" value="${s.prices[gst.priceKey]||0}" inputmode="decimal"></div>`;
-  }
+  h+=`<div class="worksheet">${rateHead("Style")}`;
+  for(const gst of GUTTER_STYLES) h+=rateRow(gst.label, gst.priceKey);
   h+=`</div>`;
   h+=`<div class="sec-h">Downspout style pricing <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ / ft</span></div>`;
-  h+=`<div class="worksheet"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Size</div><div>$ / ft</div></div>`;
-  for(const dst of DS_STYLES){
-    h+=`<div class="ws-row" style="grid-template-columns:1fr 90px"><div class="ws-lbl">${dst.label}</div><input class="ws-price" data-price="${dst.priceKey}" data-cascade="1" value="${s.prices[dst.priceKey]||0}" inputmode="decimal"></div>`;
-  }
+  h+=`<div class="worksheet">${rateHead("Size")}`;
+  for(const dst of DS_STYLES) h+=rateRow(dst.label, dst.priceKey);
   h+=`</div>`;
-  h+=`<div class="note">These per-style rates drive the itemized estimate. Editing a style's rate also sets that style's end caps, miters and (for downspouts) outlets to the same price — fine-tune any of those individually below. In flat $/ft mode the single rates below are used instead.</div>`;
+  const rDisc=compute();
+  h+=fld("Discount name","pcDiscName",s.discountName,"text",'placeholder="e.g. Military, Fire &amp; EMS, Senior"');
+  if(rDisc.hasDiscount){
+    // label runs a size down so a long name ("Fire and EMS Discount") still fits on one line
+    h+=`<div class="totline disc" style="margin-top:8px"><span style="font-size:12px">${esc(discountLabel(s))}</span><span class="v">${r1(rDisc.discountPct)}% · −${money(rDisc.discountAmt)}</span></div>`;
+  }
+  h+=`<div class="note"><b>List</b> is your standard rate — the printed estimate shows the discount as the percentage between it and <b>Your</b> rate. <b>Min</b> is a hard floor: typing below it snaps back up and flags the row <span class="min-pill">MIN</span> (set 0 for no floor). <b>Discount name</b> labels that row on the estimate — type <i>Military</i> and it prints “Military Discount”. Editing a style's <b>Your</b> rate also sets that style's end caps, miters and (for downspouts) outlets to the same price — fine-tune any of those individually below. In flat $/ft mode the single rates below are used instead.</div>`;
 
   if(flat){
     h+=`<div class="sec-h">Flat rates</div>`;
-    h+=`<div class="row2">${fld("Gutter $/ft","pcGutRate",s.flatGutterRate,"number",'step="0.25" inputmode="decimal"')}${fld("Downspout $/ft","pcDsRate",s.flatDownspoutRate,"number",'step="0.25" inputmode="decimal"')}</div>`;
-    h+=`<div class="note">Flat mode multiplies total gutter footage (including corner, outlet, and valley allowances) by your $/ft. Per-component prices are ignored.</div>`;
+    h+=`<div class="row3">${fld("Gutter list $/ft","pcGutList",s.flatGutterList,"number",'step="0.25" inputmode="decimal"')}${fld("Gutter min $/ft","pcGutMin",s.flatGutterMin,"number",'step="0.25" inputmode="decimal"')}${fld("Gutter $/ft","pcGutRate",s.flatGutterRate,"number",'step="0.25" inputmode="decimal"')}</div>`;
+    h+=`<div class="row3">${fld("Downspout list $/ft","pcDsList",s.flatDownspoutList,"number",'step="0.25" inputmode="decimal"')}${fld("Downspout min $/ft","pcDsMin",s.flatDownspoutMin,"number",'step="0.25" inputmode="decimal"')}${fld("Downspout $/ft","pcDsRate",s.flatDownspoutRate,"number",'step="0.25" inputmode="decimal"')}</div>`;
+    h+=`<div class="note">Flat mode multiplies total gutter footage (including corner, outlet, and valley allowances) by your $/ft. Per-component prices are ignored. The <b>list</b> rates drive the discount percentage printed on the estimate; the <b>min</b> rates are a hard floor.</div>`;
   } else {
     h+=`<div class="sec-h">Per-component unit prices</div>`;
     h+=`<div class="worksheet" style="margin-top:6px"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Component</div><div>Unit $</div></div>`;
@@ -3442,7 +3572,17 @@ function wirePricing(){
   const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; refreshAll(); }; };
   // allowance fields feed the AUTO component prices, so rebuild the pane to show the new derived $
   const numP=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; buildPricingPane(); refreshAll(); }; };
-  num("pcGutRate","flatGutterRate");num("pcDsRate","flatDownspoutRate");
+  // flat rates honour their minimum, and the min/list fields rebuild the pane so a clamped
+  // rate (and the discount readout) repaint immediately
+  const numClamped=(id,key,minKey)=>{ const e=byId(id); if(e) e.onchange=()=>{
+    const v=Math.max(+e.value||0, +s[minKey]||0); s[key]=v; if(v!==(+e.value||0)) e.value=v; refreshAll();
+  }; };
+  numClamped("pcGutRate","flatGutterRate","flatGutterMin");
+  numClamped("pcDsRate","flatDownspoutRate","flatDownspoutMin");
+  numP("pcGutList","flatGutterList");numP("pcDsList","flatDownspoutList");
+  numP("pcGutMin","flatGutterMin");numP("pcDsMin","flatDownspoutMin");
+  // free text — rebuild so the pane's discount readout picks up the new label
+  { const dn=byId("pcDiscName"); if(dn) dn.onchange=()=>{ s.discountName=dn.value.trim(); buildPricingPane(); refreshAll(); }; }
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
   num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");num("pcAmex","amexFee");
   num("pcCorner","footagePerCorner");numP("pcOutlet","footagePerOutlet");numP("pcValley","footagePerValley");
@@ -3453,8 +3593,19 @@ function wirePricing(){
     if(inp.hasAttribute("readonly")) return;     // AUTO components are derived, not hand-edited
     inp.onchange=()=>{
       ensurePrices();
-      s.prices[inp.dataset.price]=+inp.value||0;
-      if(inp.dataset.cascade) buildPricingPane();  // a style rate changed → re-derive AUTO components
+      const d=inp.dataset;
+      if(d.list!=null){
+        s.listPrices[d.list]=+inp.value||0;
+        buildPricingPane();          // discount readout + any floor clamp repaint
+      }else if(d.min!=null){
+        s.minPrices[d.min]=+inp.value||0;
+        ensurePrices();              // pull any rate now below the new floor up to it
+        buildPricingPane();
+      }else{
+        const res=setStyleRate(d.price, inp.value);   // hard floor
+        if(res.clamped) inp.value=res.value;
+        if(d.cascade) buildPricingPane();  // a style rate changed → re-derive AUTO components
+      }
       refreshAll();
     };
   });
@@ -4538,6 +4689,8 @@ async function buildPrintDoc(){
       ${r.customTotal?`<tr><td>Custom products</td><td class="n">${money(r.customTotal)}</td></tr>`:""}
       ${r.demoAmount?`<tr><td>Demo (${ftStr(r.demoFeet)})</td><td class="n">${money(r.demoAmount)}</td></tr>`:""}
       ${(r.screenRows||[]).map(sc=>`<tr><td>Gutter screen — ${esc(sc.name)} (${ftStr(sc.feet)})</td><td class="n">${money(sc.amount)}</td></tr>`).join("")}
+      ${r.hasDiscount?`<tr><td>Standard price</td><td class="n">${money(r.listTurnkey)}</td></tr>
+      <tr class="disc"><td>${esc(discountLabel(s))} (${r1(r.discountPct)}%)</td><td class="n">−${money(r.discountAmt)}</td></tr>`:""}
       ${s.payMethod==="card"&&r.cardFee?`<tr><td>Card fee (${s.cardFee}%)</td><td class="n">${money(r.cardFee)}</td></tr>`:""}
       <tr class="grand"><td>Turnkey Total</td><td class="n"><span class="totcirc">${money(r.grand)}</span></td></tr>
       <tr><td>${s.depositPct}% Deposit</td><td class="n">${money(r.deposit)}</td></tr>
@@ -4590,6 +4743,7 @@ async function buildPrintDoc(){
     .tot{margin-top:12px;width:320px;margin-left:auto;font-size:13px}
     .tot td{padding:5px 8px;border-bottom:1px solid #e3e8ee}
     .tot td.n{text-align:right;font-family:'Courier New',monospace;font-weight:700}
+    .tot tr.disc td{color:#c8202a;font-weight:700}
     .grand td{background:#1b2530;color:#fff;font-size:15px;border:0}
     .grand td.n{padding:8px 10px}
     .totcirc{display:inline-block;border:2.5px solid #c8202a;border-radius:50%;padding:5px 15px;line-height:1;font-weight:700}
