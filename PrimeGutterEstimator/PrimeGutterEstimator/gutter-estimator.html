@@ -935,19 +935,79 @@ function resizeRunSegment(run, segIdx){
   const newBx=a.x+ux*newLen, newBy=a.y+uy*newLen;
   const shx=newBx-b.x, shy=newBy-b.y;
   if(Math.abs(shx)<1e-6 && Math.abs(shy)<1e-6) return;
-  const oldEnd={x:run.pts[run.pts.length-1].x, y:run.pts[run.pts.length-1].y};
-  // translate this point and everything after it rigidly
-  for(let i=segIdx+1;i<run.pts.length;i++){ run.pts[i].x+=shx; run.pts[i].y+=shy; }
-  // weld: any OTHER run endpoint that was joined at the old end follows to the new end
-  const newEnd=run.pts[run.pts.length-1];
-  for(const o of P.objects){
-    if(o===run) continue;
-    if((o.t==="gutter"||(o.t==="custom"&&!o.stroke))&&o.pts&&o.pts.length){
-      const L=o.pts.length-1;
-      if(dist(o.pts[0],oldEnd)<CAP_EPS){ o.pts[0].x=newEnd.x; o.pts[0].y=newEnd.y; }
-      if(dist(o.pts[L],oldEnd)<CAP_EPS){ o.pts[L].x=newEnd.x; o.pts[L].y=newEnd.y; }
+
+  const moving=shiftedVertices(run, segIdx, ux, uy);
+
+  // snapshot the runs we touch so we can tell afterwards which segments changed LENGTH
+  // (a segment whose endpoints both moved just rode along and keeps its number)
+  const touched=new Set(moving.map(v=>v.o));
+  const before=new Map();
+  for(const o of touched) before.set(o, o.pts.map(p=>({x:p.x,y:p.y})));
+
+  // apply the shift once per distinct point object (a closed run may share references)
+  const done=new Set();
+  for(const {o,i} of moving){
+    const p=o.pts[i];
+    if(done.has(p)) continue;
+    done.add(p);
+    p.x+=shx; p.y+=shy;
+  }
+
+  for(const o of touched){
+    if(isClosedRun(o)){ const L=o.pts.length-1; o.pts[L]={x:o.pts[0].x,y:o.pts[0].y}; }
+    if(!o.lengths) continue;
+    const was=before.get(o);
+    for(let i=0;i<o.pts.length-1 && i<o.lengths.length;i++){
+      if(o===run && i===segIdx) continue;                       // keep the number just typed
+      const oldL=Math.hypot(was[i+1].x-was[i].x, was[i+1].y-was[i].y);
+      const newL=Math.hypot(o.pts[i+1].x-o.pts[i].x, o.pts[i+1].y-o.pts[i].y);
+      if(Math.abs(oldL-newL)>1e-6 && o.lengths[i]!=="" && o.lengths[i]!=null){
+        o.lengths[i]=autoLen(o.pts[i],o.pts[i+1]);              // absorbing segment: relabel
+      }
     }
   }
+}
+
+/* How far a length edit reaches.
+   Changing a segment's length shifts its far endpoint by `sh` along the segment direction `u`.
+   Walking outward from there: a segment lying ALONG u can soak the shift up by simply getting
+   longer, so propagation stops there; a segment across u would be skewed by moving only one of
+   its ends, so its far end is carried too and the walk continues. Junctions carry the shift into
+   whatever run is welded on, which is what keeps a box drawn as four separate runs square
+   instead of turning one side into a diagonal. Returns the vertices to translate. */
+const SHIFT_ALONG_TOL=0.965;   // |cos| >= this (~15 deg) counts as "along the shift"
+function shiftedVertices(startRun, segIdx, ux, uy){
+  const runs=P.objects.filter(o=>(o.t==="gutter"||(o.t==="custom"&&!o.stroke))&&o.pts&&o.pts.length>=2);
+  const anchor={x:startRun.pts[segIdx].x, y:startRun.pts[segIdx].y};
+  const key=(o,i)=>o.id+":"+i;
+  const moving=new Map(), queue=[];
+  const add=(o,i)=>{
+    const k=key(o,i);
+    if(moving.has(k)) return;
+    // the near end of the edited segment is what the length is measured from — it never moves
+    if(!(o===startRun&&i===segIdx+1) && dist(o.pts[i],anchor)<CAP_EPS) return;
+    moving.set(k,{o,i}); queue.push({o,i});
+  };
+  add(startRun, segIdx+1);
+  while(queue.length){
+    const {o,i}=queue.shift();
+    for(const j of [i-1,i+1]){                       // continue along this run
+      if(j<0||j>=o.pts.length) continue;
+      if(o===startRun && j===segIdx) continue;       // never step back over the edited segment
+      if(moving.has(key(o,j))) continue;
+      const sx=o.pts[j].x-o.pts[i].x, sy=o.pts[j].y-o.pts[i].y, L=Math.hypot(sx,sy);
+      if(L>=1e-6 && Math.abs((sx/L)*ux+(sy/L)*uy)>=SHIFT_ALONG_TOL) continue;  // absorbs it
+      add(o,j);
+    }
+    for(const p of runs){                            // carry across welded junctions
+      for(let k2=0;k2<p.pts.length;k2++){
+        if(p===o&&k2===i) continue;
+        if(moving.has(key(p,k2))) continue;
+        if(dist(p.pts[k2],o.pts[i])<CAP_EPS) add(p,k2);
+      }
+    }
+  }
+  return [...moving.values()];
 }
 
 /* placeholder so later script section can attach */
@@ -1028,11 +1088,20 @@ function gutterEndList(){
   }
   return a;
 }
+/* a run that wraps back onto its own start: the shared vertex is a miter, not two ends.
+   Derived from the points every time rather than cached on the object — extending, splitting
+   or dragging a loop open has to stop reporting it as closed, and a stored flag would go
+   stale in every one of those paths. markClosed() pins the two points to exactly equal
+   coordinates when a run is drawn shut, so this stays reliable. */
+function isClosedRun(o){
+  if(!o||!o.pts||o.pts.length<4) return false;   // 3 distinct corners + the repeated start
+  return dist(o.pts[0],o.pts[o.pts.length-1])<CAP_EPS;
+}
 function freeEnds(o){
   if(!o.pts||o.pts.length<2) return [false,false];
   const a=o.pts[0], b=o.pts[o.pts.length-1];
   // closed loop -> both ends meet -> no caps
-  if(o.pts.length>=3 && dist(a,b)<CAP_EPS) return [false,false];
+  if(isClosedRun(o)) return [false,false];
   const ends=gutterEndList();
   const free=(p,selfWhich)=>{
     for(const e of ends){
@@ -1044,8 +1113,9 @@ function freeEnds(o){
   return [free(a,0), free(b,1)];
 }
 /* nearest open gutter endpoint to a world point, within a grab threshold */
+function endSnapThreshold(){ return Math.max(GRID*0.55, 14/cam.scale); }
 function findGutterEndNear(w){
-  const thr=Math.max(GRID*0.55, 14/cam.scale);
+  const thr=endSnapThreshold();
   let best=null, bd=thr;
   for(const o of P.objects){
     if(o.t!=="gutter"||!o.pts||o.pts.length<1) continue;
@@ -1056,6 +1126,18 @@ function findGutterEndNear(w){
     }
   }
   return best;
+}
+
+/* Snap target while drawing: an existing run's end, or — since the run in progress isn't in
+   P.objects yet — its own start point, so a shape can be closed back onto itself. */
+function snapEndNear(w){
+  const hit=findGutterEndNear(w);
+  if(hit) return hit;
+  if(drawing && drawing.t==="gutter" && drawing.pts.length>=3){
+    const a=drawing.pts[0];   // >=3 pts so the start isn't still the previous point
+    if(dist(w,a)<endSnapThreshold()) return {o:null,end:0,pt:a,self:true};
+  }
+  return null;
 }
 
 /* corners of a gutter run -> classification */
@@ -1070,10 +1152,64 @@ function runCorners(run){
     out.push({i, ang, bay, pt:pts[i]});
   }
   // closed loop: the shared start/end vertex is also a corner
-  if(pts.length>=4 && dist(pts[0],pts[pts.length-1])<CAP_EPS){
+  if(isClosedRun(run)){
     const ang=angleAtDeg(pts[pts.length-2], pts[0], pts[1]);
     if(ang<s.straightMax){
       out.push({i:0, ang, bay:Math.abs(ang-90)>=s.bayDeviation, pt:pts[0]});
+    }
+  }
+  return out;
+}
+
+/* Corners formed where the ends of DIFFERENT runs meet — a house wrapped with several runs
+   mitres at those junctions just as it would mid-run. runCorners() only sees inside one run,
+   so these are gathered globally and counted once in compute(). */
+const MIN_CORNER_DEG=1;   // below this two arms leave on the same bearing — overlap, not a corner
+function junctionCorners(){
+  const s=P.settings, out=[];
+  // every gutter arm leaving an endpoint. A closed run contributes both of its arms, so a
+  // branch landing on a loop's shared vertex is seen — the loop's own corner there is then
+  // discounted below so it isn't billed twice.
+  const ends=[];
+  for(const o of P.objects){
+    if(o.t!=="gutter"||!o.pts||o.pts.length<2) continue;
+    const L=o.pts.length-1;
+    ends.push({o, pt:o.pts[0], nb:o.pts[1], loop:isClosedRun(o)});
+    ends.push({o, pt:o.pts[L], nb:o.pts[L-1], loop:isClosedRun(o)});
+  }
+  const used=new Array(ends.length).fill(false);
+  for(let i=0;i<ends.length;i++){
+    if(used[i]) continue;
+    used[i]=true;
+    const cl=[ends[i]];
+    for(let j=i+1;j<ends.length;j++){
+      if(!used[j] && dist(ends[j].pt, ends[i].pt)<CAP_EPS){ used[j]=true; cl.push(ends[j]); }
+    }
+    if(cl.length<2) continue;
+    if(!cl.some(e=>e.o!==cl[0].o)) continue;   // one run doubling back on itself, not a junction
+    // n arms meeting form n-1 miters, less the one runCorners already counts per closed loop
+    const loops=new Set(cl.filter(e=>e.loop).map(e=>e.o)).size;
+    const budget=cl.length-1-loops;
+    if(budget<=0) continue;
+    const pt=cl[0].pt;
+    // bill the junction to the largest style present so the result can't depend on draw order
+    const rank=o=>GUTTER_STYLES.findIndex(g=>g.id===gutterSizeFor(o));
+    const run=cl.map(e=>e.o).sort((a,b)=> (rank(b)-rank(a)) || String(a.id).localeCompare(String(b.id)))[0];
+    let angs;
+    if(cl.length===2){
+      angs=[angleAtDeg(cl[0].nb, pt, cl[1].nb)];        // same measure runCorners uses
+    } else {
+      // 3+ arms meet: the sectors between neighbouring bearings are the corners
+      const bear=cl.map(e=>Math.atan2(e.nb.y-e.pt.y, e.nb.x-e.pt.x)).sort((a,b)=>a-b);
+      angs=bear.map((b,k)=>{ let d=bear[(k+1)%bear.length]-b; if(d<0) d+=Math.PI*2; return d*180/Math.PI; })
+               .sort((a,b)=>Math.abs(a-90)-Math.abs(b-90));   // most corner-like sectors first
+    }
+    let made=0;
+    for(const ang of angs){
+      if(made>=budget) break;
+      if(ang>=s.straightMax || ang<MIN_CORNER_DEG) continue;   // straight, or two arms overlapping
+      out.push({pt, ang, bay:Math.abs(ang-90)>=s.bayDeviation, run});
+      made++;
     }
   }
   return out;
@@ -1139,6 +1275,14 @@ function compute(){
       const ty=o.screenType||"ez";
       screenRaw[ty]=(screenRaw[ty]||0)+pathFeetRaw(o.pts);
     }
+  }
+  // corners where separate runs meet — outside the per-object loop, they belong to no one run
+  for(const c of junctionCorners()){
+    corners++;
+    const gms=gutterStyle(gutterSizeFor(c.run));
+    if(gms.miterKey) q[gms.miterKey]++;
+    else if(c.bay) q.bay++;
+    else if(s.regularMiter==="strip") q.strip++; else q.box++;
   }
   // custom product rows + total cost (stroke-mode products round their aggregate footage)
   const customRows=Object.values(customAgg).map(c=>{
@@ -1285,6 +1429,14 @@ function materialList(){
     } else if(o.t==="valley"){ valley++; }
     else if(o.t==="splash"){ if(o.material==="concrete") splashC++; else splashP++; }
   }
+  // miters where separate runs meet, billed to the colour/brand of the run they join
+  for(const c of junctionCorners()){
+    const gms=gutterStyle(gutterSizeFor(c.run));
+    const colorName=c.run.color||s.gutterColor;
+    const brand=effBrand(c.run);
+    const part=gms.miterKey ? gms.miterLabel : (c.bay?"Bay miter":(s.regularMiter==="strip"?"Strip miter":"Box miter"));
+    add(gutParts,part+"|"+brand+"|"+colorName,{item:part,unit:"ea",color:colorName,brand}).qty+=1;
+  }
   const gb=s.gutterBrand||"Spectra";
   const out=[];
   // each gutter/downspout row carries its own brand (per-object override or the job default)
@@ -1361,6 +1513,16 @@ draw = function(){
   const objs=[...P.objects].sort((a,b)=>(order[a.t]||9)-(order[b.t]||9));
   for(const o of objs) drawObject(o);
 
+  // miters where separate runs meet: painted once here, since they belong to no single object.
+  // A T-junction bills two miters at one point — fan them apart so the count stays visible.
+  const jseen={};
+  for(const c of junctionCorners()){
+    const sp=worldToScreen(c.pt), k=Math.round(sp.x)+","+Math.round(sp.y);
+    const n=(jseen[k]=(jseen[k]||0)+1)-1;
+    if(n){ const a=n*2.0944; sp.x+=Math.cos(a)*9; sp.y+=Math.sin(a)*9; }
+    drawMiterMark(sp, c.bay);
+  }
+
   // in-progress drawing
   drawInProgress();
 
@@ -1373,7 +1535,7 @@ draw = function(){
 
   // highlight a snappable gutter end the cursor is near (shows a corner will form)
   if(tool==="gutter" && cursorW && !calib){
-    const hit=findGutterEndNear(cursorW);
+    const hit=snapEndNear(cursorW);
     if(hit){
       const sp=worldToScreen(hit.pt);
       ctx.save();
@@ -1522,20 +1684,7 @@ function drawGutter(o){
     drawCapMark(pts[pts.length-1],pts[pts.length-2], fe[1] && caps[1]!==false);
   }
   // corner miter markers
-  for(const c of runCorners(o)){
-    const sp=worldToScreen(c.pt);
-    ctx.save();
-    if(c.bay){
-      ctx.fillStyle=getCSS("--orange");ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
-      ctx.beginPath();
-      ctx.moveTo(sp.x,sp.y-7);ctx.lineTo(sp.x+7,sp.y);ctx.lineTo(sp.x,sp.y+7);ctx.lineTo(sp.x-7,sp.y);ctx.closePath();
-      ctx.fill();ctx.stroke();
-    }else{
-      ctx.fillStyle="#33455a";ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
-      roundRect(ctx,sp.x-6,sp.y-6,12,12,2);ctx.fill();ctx.stroke();
-    }
-    ctx.restore();
-  }
+  for(const c of runCorners(o)) drawMiterMark(worldToScreen(c.pt), c.bay);
   // segment length chips
   for(let i=0;i<o.pts.length-1;i++){
     const a=pts[i], b=pts[i+1];
@@ -1551,12 +1700,28 @@ function drawGutter(o){
   drawVertexHandles(o,pts);
 }
 function line(pts){ ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke(); }
+// diamond = bay miter, square = regular box/strip miter
+function drawMiterMark(sp,bay){
+  ctx.save();
+  if(bay){
+    ctx.fillStyle=getCSS("--orange");ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.moveTo(sp.x,sp.y-7);ctx.lineTo(sp.x+7,sp.y);ctx.lineTo(sp.x,sp.y+7);ctx.lineTo(sp.x-7,sp.y);ctx.closePath();
+    ctx.fill();ctx.stroke();
+  }else{
+    ctx.fillStyle="#33455a";ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
+    roundRect(ctx,sp.x-6,sp.y-6,12,12,2);ctx.fill();ctx.stroke();
+  }
+  ctx.restore();
+}
 // hollow draggable dots at each vertex of the sole selected run (drag a dot = move that corner)
 function drawVertexHandles(o,pts){
   if(sel.size!==1 || !sel.has(o.id)) return;
   ctx.save();
   ctx.fillStyle="#fff"; ctx.strokeStyle="#2b7fd0"; ctx.lineWidth=2.5;
-  for(const p of pts){ ctx.beginPath();ctx.arc(p.x,p.y,6,0,7);ctx.fill();ctx.stroke(); }
+  // a closed run repeats its start as the last point — draw that merged corner once
+  const n = isClosedRun(o) ? pts.length-1 : pts.length;
+  for(let i=0;i<n;i++){ const p=pts[i]; ctx.beginPath();ctx.arc(p.x,p.y,6,0,7);ctx.fill();ctx.stroke(); }
   ctx.restore();
 }
 function drawCapMark(end,prev,on){
@@ -2646,7 +2811,7 @@ function onDown(e){
       }
     } else {
       // snap onto an existing gutter end (forms a clean corner / closes a loop), else grid
-      const hit=findGutterEndNear(w);
+      const hit=snapEndNear(w);
       const prev=drawing.pts[drawing.pts.length-1];
       const np=hit ? {x:hit.pt.x,y:hit.pt.y} : snapAngleW(snapW(w), prev);
       drawing.pts.push(np);
@@ -2717,17 +2882,27 @@ function onMove(e){
   if(arrowDrag){ const o=arrowDrag.o; if(arrowDrag.end===0){o.x1=w.x;o.y1=w.y;}else{o.x2=w.x;o.y2=w.y;} draw(); return; }
   if(vertexDrag){
     const o=vertexDrag.o, idx=vertexDrag.idx;
+    const L=o.pts.length-1, closed=isClosedRun(o);
     let np=snapW(w);
     if(o.t==="gutter"||o.t==="custom"){
-      const ref = idx>0 ? o.pts[idx-1] : (o.pts.length>1 ? o.pts[1] : null);
+      // on a closed run the vertex before index 0 is the one before the repeated end point
+      const ref = idx>0 ? o.pts[idx-1]
+                : closed ? o.pts[L-1]
+                : (o.pts.length>1 ? o.pts[1] : null);
       np=snapAngleW(np, ref);
     }
     const oldP={x:o.pts[idx].x,y:o.pts[idx].y};
     moveWeldedVertices(o, oldP, np);   // keep connected corners attached
     o.pts[idx]={x:np.x,y:np.y};
+    // the shared start/end of a closed run is one corner — move both copies together
+    if(closed && (idx===0||idx===L)){ o.pts[0]={x:np.x,y:np.y}; o.pts[L]={x:np.x,y:np.y}; }
     if(P.settings.autoMeasure && o.lengths){
       if(idx>0) o.lengths[idx-1]=autoLen(o.pts[idx-1],o.pts[idx]);
-      if(idx<o.pts.length-1) o.lengths[idx]=autoLen(o.pts[idx],o.pts[idx+1]);
+      if(idx<L) o.lengths[idx]=autoLen(o.pts[idx],o.pts[idx+1]);
+      if(closed && (idx===0||idx===L)){
+        o.lengths[0]=autoLen(o.pts[0],o.pts[1]);
+        o.lengths[L-1]=autoLen(o.pts[L-1],o.pts[L]);
+      }
     }
     draw(); return;
   }
@@ -2831,7 +3006,7 @@ function onUp(e){
       //     line visibly un-snapped the instant you lifted.
       const prev=drawing.pts[drawing.pts.length-1];
       const w=cursorW||snapAngleW(snapW(screenToWorld(upPt)),prev);
-      if(drawing.t==="gutter"){ const hit=findGutterEndNear(w); drawing.pts.push(hit?{x:hit.pt.x,y:hit.pt.y}:{x:w.x,y:w.y}); finishGutter(); }
+      if(drawing.t==="gutter"){ const hit=snapEndNear(w); drawing.pts.push(hit?{x:hit.pt.x,y:hit.pt.y}:{x:w.x,y:w.y}); finishGutter(); }
       else { drawing.pts.push({x:w.x,y:w.y}); finishCustom(); }
     } else { cancelDrawing(); }   // a tap that didn't drag = nothing placed
     updateDrawBar(); return;
@@ -2893,6 +3068,16 @@ function onDbl(e){
   }
 }
 
+/* once a run's last point lands back on its first, pin the two coincident vertices to exactly
+   the same coordinates so the closing miter can't drift apart */
+function markClosed(o){
+  if(!o||!o.pts||o.pts.length<4) return;
+  const L=o.pts.length-1;
+  if(dist(o.pts[0],o.pts[L])<CAP_EPS){
+    o.pts[L]={x:o.pts[0].x,y:o.pts[0].y};
+    if(P.settings.autoMeasure&&o.lengths) o.lengths[L-1]=autoLen(o.pts[L-1],o.pts[L]);
+  }
+}
 function finishGutter(){
   if(!(drawing&&drawing.t==="gutter")) return;
   if(drawing.pts.length<2){ drawing=null; gutterExtend=null; draw(); return; }
@@ -2923,6 +3108,7 @@ function finishGutter(){
         R.lengths=newLens.concat(R.lengths);
         firstNewSeg=0;
       }
+      markClosed(R);
       sel=new Set([R.id]); drawing=null; const wasAuto=auto; const rid=R.id; gutterExtend=null; refreshAll();
       if(!wasAuto){ setTimeout(()=>openSeg(rid,firstNewSeg),30); }
       return;
@@ -2936,6 +3122,7 @@ function finishGutter(){
   let lengths=new Array(pts.length-1).fill("");
   if(auto){ for(let i=0;i<pts.length-1;i++){ lengths[i]=autoLen(pts[i],pts[i+1]); } }
   const o={t:"gutter",id:uid(),pts,lengths,size:gutterDrawSize,color:gutterDrawColor,caps:[true,true]};
+  markClosed(o);
   P.objects.push(o); sel=new Set([o.id]); drawing=null; refreshAll();
   if(!auto){ setTimeout(()=>openSeg(o.id,0),30); }
 }
