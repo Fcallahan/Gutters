@@ -72,6 +72,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .tb-btn.primary{background:var(--prime);border-color:var(--prime-dark);color:#fff}
 .tb-btn.primary:hover{background:#d8242f}
 .tb-btn.ghost{background:transparent;border-color:#3a4d61}
+.tb-btn.attn{background:#a35a00;border-color:#c77700;color:#fff}
 .tb-btn.ptool{padding:6px 10px}
 .tb-btn.ptool.active{background:var(--prime);border-color:var(--prime);color:#fff}
 /* autosave / photo-storage trouble indicator — this used to fail silently */
@@ -327,9 +328,6 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .photo-card canvas{display:block;cursor:crosshair;touch-action:none}
 .photo-card .pc-bar{display:flex;gap:6px;align-items:center;padding:7px 9px;border-top:1px solid var(--line);background:#f6f8fa}
 .photo-empty{color:#33455a;text-align:center;margin:auto;font-weight:700}
-.title-card{outline:3px solid #c8202a}
-.title-card .title-preview{display:block;width:520px;max-width:60vw;height:auto}
-.title-card .title-tag{background:#c8202a;color:#fff;font-size:11px;font-weight:800;letter-spacing:.4px;padding:5px 9px}
 
 /* PDF view page — same overlay idiom as #photoStage. In the app a native PDFView is laid over
    #pdfHost (the web side only reports its rect); in a plain browser #pdfHost holds an iframe. */
@@ -391,9 +389,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
     <button class="tb-btn" id="btnSave">Save</button>
     <button class="tb-btn primary" id="btnPrint">Print / PDF</button>
     <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
-    <input type="file" id="photoInput" accept="image/*" multiple style="display:none">
-    <input type="file" id="titleInput" accept="image/*" style="display:none">
-  </div>
+    <input type="file" id="photoInput" accept="image/*" multiple style="display:none">  </div>
 
   <div id="optionsBar"></div>
 
@@ -467,9 +463,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <strong id="photoBarTitle" style="letter-spacing:.4px">PHOTO MARKUP</strong>
           <span style="color:#9fb0c0;font-size:12px" id="photoHint">Import photos and mark up the runs.</span>
           <div class="tb-spacer"></div>
-          <button class="tb-btn" id="btnAddPhoto">+ Add photos</button>
-          <button class="tb-btn" id="btnTitleImg" title="Cover photo shown on the first page of the estimate">+ Title image</button>
-          <div class="ob-grp" id="photoTools" style="display:flex;gap:4px;align-items:center">
+          <button class="tb-btn" id="btnAddPhoto">+ Add photos</button>          <div class="ob-grp" id="photoTools" style="display:flex;gap:4px;align-items:center">
             <button class="tb-btn ptool" data-ptool="select">⬚ Select</button>
             <button class="tb-btn ptool" data-ptool="pen">✎ Pen</button>
             <button class="tb-btn ptool" data-ptool="line">╱ Line</button>
@@ -509,6 +503,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <div id="pdfOpts"></div>
           <span id="pdfStatus"></span>
           <div class="tb-spacer"></div>
+          <button class="tb-btn" id="pdfPagesBtn" title="Choose what each PDF diagram page shows">▭ Diagram pages</button>
           <button class="tb-btn" id="pdfRefresh" title="Rebuild the PDF">↻ Refresh</button>
           <button class="tb-btn" id="pdfShare" title="Save to Files, Mail, AirDrop or another app">⇪ Share / Save</button>
           <button class="tb-btn primary" id="pdfPrint">Print</button>
@@ -672,10 +667,12 @@ function defaultProject(){
    deposit and caveats differ — so it rides alongside settings/objects on OPTIONS[] and gets
    swapped by activate()/captureActive(). The key is still "pres" because jobs were saved
    under that name while the (since removed) Presentation Mode owned it. */
+const MAX_PDF_PAGES=12;   // diagram pages per option — plenty for a sprawling job, short of an endless PDF
 function defaultPres(){
   return {
     notes:[],                     // {id,text} — printed per option, never priced
-    terms:""                      // "" = fall back to the standard generated disclaimer
+    terms:"",                     // "" = fall back to the standard generated disclaimer
+    pages:[]                      // PDF diagram page frames, world {x,y,w,h}; [] = auto-fit onto page 1
   };
 }
 // Same job as ensurePrices: make any project (old save, hand-edited JSON, undo snapshot
@@ -685,7 +682,9 @@ function ensurePres(p){
   if(!p||typeof p!=="object") return defaultPres();
   return {
     notes:Array.isArray(p.notes)?p.notes.filter(n=>n&&typeof n==="object").map(n=>({id:n.id||uid(),text:String(n.text||"")})):[],
-    terms:typeof p.terms==="string"?p.terms:""
+    terms:typeof p.terms==="string"?p.terms:"",
+    pages:Array.isArray(p.pages)?p.pages.filter(f=>f&&[f.x,f.y,f.w,f.h].every(v=>isFinite(+v))&&+f.w>0&&+f.h>0)
+      .slice(0,MAX_PDF_PAGES).map(f=>({x:+f.x,y:+f.y,w:+f.w,h:+f.h})):[]
   };
 }
 
@@ -1585,6 +1584,7 @@ draw = function(){
 
   // in-progress drawing
   drawInProgress();
+  if(tool==="pages") drawPageFrames();
 
   // eraser cursor ring (Demo / Screen eraser mode)
   if(eraseModeActive() && cursorW){
@@ -2099,18 +2099,36 @@ function makeSvgCtx(){
    marker sizes are partly screen-constant, so this sets how big they print relative to the
    house: ~1040 wide scaled onto a 7.5in column matches the old landscape-iPad snapshot. */
 const PRINT_VIEW={w:1040,h:1180};
-function diagramSVG(){
-  const b=P.objects.length?allBounds():null;
+/* A PDF page's content box in CSS px. WebView.swift already insets the paper 0.5in, so the native
+   build prints with @page{margin:0}: 1 CSS px = .75pt and a page holds exactly 720×960 (measured by
+   running a ruler page through the app's own renderPDF). @page{margin:.5in} on top of that doubled
+   the margin and shrank the layout ~4%, which pushed page 1's job summary onto page 2. A browser
+   print keeps the .5in @page margin — same box. */
+const PDF_PAGE={w:720,h:960};
+// What a diagram page's parts may add up to. Well short of 960: iOS WebKit's print pass sets text a few
+// % taller than the browser lays it out (page 1 came out ~60px taller in the app's renderPDF than in Chrome).
+const PDF_BUDGET_H=PDF_PAGE.h-80;
+/* frame (optional): a world rect from the PDF pages tool. It prints exactly that region, clipped,
+   filling the box — so a smaller frame prints the runs AND their labels (chipPx scales with zoom)
+   bigger than an auto fit of the whole job could. */
+function diagramSVG(frame){
+  const b=P.objects.length?(frame||allBounds()):null;
   if(!b) return "";
   const saved={ctx, cam:{...cam}, view:{...view}, sel, segSel, hover, labelBoxes};
-  let body="", e=null;
+  let body="", e=null, clip=null;
   // finally, always: a throw mid-render must never leave the live canvas drawing into the recorder
   try{
-    Object.assign(view,PRINT_VIEW);
-    const pad=60;
-    cam.scale=Math.max(.15,Math.min(3,Math.min((view.w-pad*2)/Math.max(1,b.w),(view.h-pad*2)/Math.max(1,b.h))));
-    cam.x=b.x+b.w/2-view.w/(2*cam.scale);
-    cam.y=b.y+b.h/2-view.h/(2*cam.scale);
+    if(frame){
+      view.w=PRINT_VIEW.w; view.h=PRINT_VIEW.w*frame.h/frame.w;
+      cam.scale=view.w/frame.w; cam.x=frame.x; cam.y=frame.y;
+      clip={w:view.w,h:view.h};
+    } else {
+      Object.assign(view,PRINT_VIEW);
+      const pad=60;
+      cam.scale=Math.max(.15,Math.min(3,Math.min((view.w-pad*2)/Math.max(1,b.w),(view.h-pad*2)/Math.max(1,b.h))));
+      cam.x=b.x+b.w/2-view.w/(2*cam.scale);
+      cam.y=b.y+b.h/2-view.h/(2*cam.scale);
+    }
     sel=new Set(); segSel=new Set(); hover=null; labelBoxes=[];
     const rec=makeSvgCtx(); ctx=rec;
     drawScene();
@@ -2119,9 +2137,10 @@ function diagramSVG(){
     ctx=saved.ctx; Object.assign(cam,saved.cam); Object.assign(view,saved.view);
     sel=saved.sel; segSel=saved.segSel; hover=saved.hover; labelBoxes=saved.labelBoxes;
   }
-  if(!body || !isFinite(e.x0)) return "";
-  // crop to what was actually drawn (chips and dragged labels overhang objBounds), not the fit box
-  const m=14, vx=e.x0-m, vy=e.y0-m, vw=e.x1-e.x0+m*2, vh=e.y1-e.y0+m*2;
+  if(!body || (!clip && !isFinite(e.x0))) return "";
+  // auto: crop to what was actually drawn (chips and dragged labels overhang objBounds), not the fit
+  // box. A frame IS the crop: the rep chose it, and whatever is past its edge belongs to the other page.
+  const m=14, [vx,vy,vw,vh] = clip ? [0,0,clip.w,clip.h] : [e.x0-m, e.y0-m, e.x1-e.x0+m*2, e.y1-e.y0+m*2];
   const f=v=>+v.toFixed(2);
   return `<svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="${f(vx)} ${f(vy)} ${f(vw)} ${f(vh)}" width="${f(vw)}" height="${f(vh)}" preserveAspectRatio="xMidYMid meet" style="aspect-ratio:${f(vw)}/${f(vh)}">`+
     `<rect x="${f(vx)}" y="${f(vy)}" width="${f(vw)}" height="${f(vh)}" fill="#fff"/>${body}</svg>`;
@@ -2271,12 +2290,14 @@ const ICON={
   demo:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M5 4l14 16"/></svg>',
   screen:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="M7 6v12M11 6v12M15 6v12M3 10h18M3 14h18"/></svg>',
   splash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l4-8h8l4 8z"/><path d="M2 20h20"/></svg>',
+  pages:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="10" height="14" rx="1"/><rect x="11" y="3" width="10" height="14" rx="1" stroke-dasharray="3 2"/></svg>',
   add:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>'
 };
 // base tools. behavior = which interaction code runs; label shows on the button.
 const BASE_TOOLS=[
   {id:"select",behavior:"select",icon:"select",name:"Select & move",key:"V"},
   {id:"hand",behavior:"hand",icon:"hand",name:"Pan (or hold Space)",key:"H"},
+  {id:"pages",behavior:"pages",icon:"pages",name:"PDF pages — frame what each diagram page prints",key:"P",lbl:"PDF"},
   {id:"_div"},
   {id:"gutter",behavior:"gutter",icon:"gutter",name:'Gutter — pick style above',key:"G",lbl:'GUT'},
   {id:"ds",behavior:"ds",icon:"ds",name:'Downspout — pick size above',key:"D",lbl:'DS'},
@@ -2332,7 +2353,7 @@ function setTool(id){
   if(def.behavior==="gutter" && def.size) gutterDrawSize=def.size;
   if(def.behavior==="ds" && def.size) dsDrawSize=def.size;
   activeCustom = (def.behavior==="custom") ? def.custom : null;
-  canvas.style.cursor = (tool==="hand")?"grab":(tool==="select"?"default":"crosshair");
+  canvas.style.cursor = (tool==="hand")?"grab":(tool==="select"||tool==="pages"?"default":"crosshair");
   buildDock();buildOptbar();
   setHint(toolHint(tool));
   draw();
@@ -2344,6 +2365,7 @@ function toolHint(t){
     // the post-marquee hint and the downspout/label hints, right when they matter.
     select:"Tap to select • drag to move • drag the dots to adjust corners • box-drag to grab several • Delete removes",
     hand:"Drag to pan the diagram",
+    pages:"Drag a page frame to move it • drag a corner to resize • × removes a page • drag empty space or pinch to pan",
     gutter:"Drag to draw a run, lift to finish • start on an existing end (green ring) to add a corner • (mouse: click corners, then ✓ Finish)",
     ds:"Tap to drop a downspout • then type its run, e.g. \"AAA 20\" — 1 outlet is automatic • change its color any time via Select",
     valley:"Tap an inside corner to place a Valley Shield (counts as 2 ft each)",
@@ -2358,6 +2380,185 @@ function toolHint(t){
   })[t]||"";
 }
 function setHint(t){ const h=document.getElementById("hint"); if(t){h.textContent=t;h.style.display="block";} else h.style.display="none"; }
+
+/* ---- PDF pages tool: frame what each printed diagram page shows ----
+   Auto-fitting a big job onto page 1 shrinks everything — labels scale with the zoom — until the
+   footage chips are too small to read. Here the rep drags page-shaped frames over the drawing: frame 1
+   prints on page 1 above the prices, every later frame on a diagram page of its own right after, in
+   order. Frames are world rects on P.pres.pages (per option, undoable, saved); [] = auto-fit. Editor
+   chrome only — painted in draw(), never drawScene(). */
+// page 1 keeps the estimate's red; later pages cycle through colors that stay distinct on the grid
+const PAGE_COLORS=["#c8202a","#2b7fd0","#1f8a52","#7048c4","#d97706","#0e8f8f"];
+function pageColor(i){ return i ? PAGE_COLORS[1+(i-1)%(PAGE_COLORS.length-1)] : PAGE_COLORS[0]; }
+let frameDrag=null;   // {i, corner:-1 (move) | 0..3 TL,TR,BR,BL, start:world pt, orig:{x,y,w,h}}
+
+// Measured (Chrome) heights in CSS px of a PDF diagram page's parts. buildEstimateHTML sizes the diagram
+// box from these and the editor shapes frames from the same numbers, so a frame prints as drawn.
+// Re-measure if the .brand/.cust/.optstrip/.price CSS in buildEstimateHTML changes.
+const PDFL={head:46, mini:24, gap:9, strip:25, custBase:13, custRow:29, rowH:23, priceBase:70, summary:59, note:16};
+/* Diagram box (CSS px) on an option's page 1 (page=0) or a later page (page>0, all alike). Its height is set outright
+   rather than flexed into the leftover space: iOS WebKit's print pass didn't shrink a flex:1 box when
+   its taller text overran a fixed-height page, and the Turnkey Total was cut onto page 2. */
+function pdfBoxFor(page,{meta,settings,r,nPages,first,multi}){
+  const strip=(multi||nPages>1)?PDFL.gap+PDFL.strip:0;
+  if(page>0) return {w:PDF_PAGE.w, h:PDF_BUDGET_H-PDFL.mini-(PDFL.gap+PDFL.strip)-PDFL.gap};
+  const has=v=>String(v||"").trim()?1:0;
+  const rows=Math.max(has(meta.name)+has(meta.address), has(fmtPhone(meta.phone))+has(fmtPhone(meta.cell))+has(meta.email),
+    has(meta.gateCode)+(has(meta.salesperson)||has(fmtPhone(meta.salespersonPhone))));
+  const head=first ? PDFL.head+(rows?PDFL.gap+PDFL.custBase+rows*PDFL.custRow:0) : PDFL.mini;
+  const n=pdfPriceRows(settings,r).length;
+  const price=PDFL.gap+Math.max(PDFL.summary, PDFL.rowH*(n-1)+PDFL.priceBase);
+  return {w:PDF_PAGE.w, h:Math.max(160, Math.floor(PDF_BUDGET_H-head-strip-PDFL.gap-price-PDFL.note))};
+}
+// the same box for the ACTIVE option, for the editor's frames
+function pdfDiagramBox(page,nPages){
+  if(nPages==null) nPages=(P.pres.pages||[]).length;
+  return pdfBoxFor(page,{meta:P.meta, settings:P.settings, r:compute(), nPages, first:activeOpt===0, multi:OPTIONS.length>1});
+}
+// smallest rect of the box's shape that holds r, with a margin
+function frameAround(r,box){
+  const a=box.w/box.h, pad=Math.max(r.w,r.h)*.04+30;
+  let w=r.w+pad*2, h=r.h+pad*2;
+  if(w/h<a) w=h*a; else h=w/a;
+  return {x:r.x+r.w/2-w/2, y:r.y+r.h/2-h/2, w, h};
+}
+function autoPageFrames(n){
+  const b=allBounds(); if(!b||!n) return [];
+  if(n===1) return [frameAround(b,pdfDiagramBox(0,1))];
+  // n strips across the long side, each overlapping its neighbors a little so a run at a seam shows on both pages
+  const wide=b.w>=b.h, L=wide?b.w:b.h, step=L/n, ov=step*.08;
+  return Array.from({length:n},(_,i)=>{
+    const s0=Math.max(0,i*step-ov), s1=Math.min(L,(i+1)*step+ov);
+    const r=wide?{x:b.x+s0,y:b.y,w:s1-s0,h:b.h}:{x:b.x,y:b.y+s0,w:b.w,h:s1-s0};
+    return frameAround(r,pdfDiagramBox(i?1:0,n));
+  });
+}
+function setPdfPageCount(n){
+  const cur=P.pres.pages||[];
+  if(n===cur.length) return;
+  if(n && !allBounds()){ setHint("Draw the job first — page frames are placed around the drawing."); return; }
+  // fewer pages keeps the first n frames as the rep placed them; more re-splits the drawing
+  P.pres.pages = n<cur.length ? cur.slice(0,n) : autoPageFrames(n);
+  recordHistory(); scheduleSave(); buildOptbar(); draw();
+}
+/* + Page: a new frame centered on what's on screen, so the rep pans to the part of the job that needs
+   its own page and taps +. Sized to most of the visible canvas, in the later-page box's shape. */
+function addPdfPage(){
+  const cur=P.pres.pages||[];
+  if(cur.length>=MAX_PDF_PAGES){ setHint(MAX_PDF_PAGES+" diagram pages is the most one option can have."); return; }
+  if(!allBounds()){ setHint("Draw the job first — page frames are placed around the drawing."); return; }
+  if(!cur.length){ setPdfPageCount(1); return; }
+  const box=pdfDiagramBox(1,cur.length+1), a=box.w/box.h, c=screenToWorld({x:view.w/2,y:view.h/2});
+  let w=view.w*.6/cam.scale, h=w/a;
+  if(h>view.h*.6/cam.scale){ h=view.h*.6/cam.scale; w=h*a; }
+  P.pres.pages=[...cur,{x:c.x-w/2,y:c.y-h/2,w,h}];
+  recordHistory(); scheduleSave(); buildOptbar(); draw();
+}
+function removePdfPage(i){
+  const cur=P.pres.pages||[]; if(!cur[i]) return;
+  P.pres.pages=cur.filter((_,j)=>j!==i);   // later pages move up a number
+  recordHistory(); scheduleSave(); buildOptbar(); draw();
+}
+/* "Too small to read" on an auto-fit page 1: the printed size of a 12px footage chip. Chips scale with
+   the zoom (chipPx), so it's the fit's zoom (sc) times how far the page-1 box then shrinks the cropped
+   svg (fit). Under ~7 CSS px (≈5pt) the numbers stop being legible on paper. */
+function diagramCrowded(){
+  if((P.pres.pages||[]).length) return false;
+  const b=allBounds(); if(!b) return false;
+  const box=pdfDiagramBox(0,0);
+  const sc=Math.max(.15,Math.min(3,Math.min((PRINT_VIEW.w-120)/Math.max(1,b.w),(PRINT_VIEW.h-120)/Math.max(1,b.h))));
+  const fit=Math.min(box.w/(b.w*sc+40), box.h/(b.h*sc+40));
+  return 12*(P.settings.labelSize||1)*sc*fit < 7;
+}
+function frameCorners(f){ return [{x:f.x,y:f.y},{x:f.x+f.w,y:f.y},{x:f.x+f.w,y:f.y+f.h},{x:f.x,y:f.y+f.h}]; }
+// label chip above a frame, in screen px; a real page's chip ends in a × that removes that page
+function frameChip(f,i,auto){
+  const a=worldToScreen(f), label=auto?"PDF page 1 · auto fit":"PDF page "+(i+1);
+  ctx.save(); ctx.font="700 12px Arial"; const tw=ctx.measureText(label).width; ctx.restore();
+  const xw=auto?0:24, w=tw+16+xw, clear=canvasClearArea();
+  // sticky, like a table header: a frame running under the floating dock or options bar keeps its label
+  // (and so its ×) in the clear, but never slides past the frame's own far edge
+  const x=Math.max(a.x, Math.min(clear.left, a.x+f.w*cam.scale-w));
+  const y=Math.max(a.y-22, Math.min(clear.top, a.y+f.h*cam.scale-22));
+  return {label, x, y, w, h:20, del:auto?null:{x:x+tw+16, y, w:xw, h:20}};
+}
+// canvas px to the right of the floating dock and below the options bar
+function canvasClearArea(){
+  const cr=canvas.getBoundingClientRect(), dk=byId("dock").getBoundingClientRect(), ob=byId("optbarWrap").getBoundingClientRect();
+  return {left:dk.width?dk.right-cr.left+8:0, top:ob.height?ob.bottom-cr.top+6:0};
+}
+function pageFrameHit(pt){
+  const pages=P.pres.pages||[], tol=lastPtrType==="touch"?24:12, w=screenToWorld(pt), pad=lastPtrType==="touch"?8:2;
+  for(let i=pages.length-1;i>=0;i--){
+    const d=frameChip(pages[i],i,false).del;
+    if(pt.x>=d.x-pad&&pt.x<=d.x+d.w+pad&&pt.y>=d.y-pad&&pt.y<=d.y+d.h+pad) return {i,del:true};
+  }
+  for(let i=pages.length-1;i>=0;i--){
+    const cs=frameCorners(pages[i]);
+    for(let k=0;k<4;k++){ const p=worldToScreen(cs[k]); if(Math.hypot(p.x-pt.x,p.y-pt.y)<=tol) return {i,corner:k}; }
+  }
+  for(let i=pages.length-1;i>=0;i--){ const f=pages[i]; if(w.x>=f.x&&w.x<=f.x+f.w&&w.y>=f.y&&w.y<=f.y+f.h) return {i,corner:-1}; }
+  return null;
+}
+function dragPageFrame(w){
+  const f=(P.pres.pages||[])[frameDrag.i], o=frameDrag.orig;
+  if(!f){ frameDrag=null; return; }
+  const k=frameDrag.corner;
+  if(k<0){ f.x=o.x+w.x-frameDrag.start.x; f.y=o.y+w.y-frameDrag.start.y; return; }
+  // resize about the opposite corner, keeping the page's shape so it still prints as framed
+  const ax=(k===1||k===2)?o.x:o.x+o.w, ay=(k===2||k===3)?o.y:o.y+o.h, a=o.w/o.h;
+  const nw=Math.max(60,Math.abs(w.x-ax),Math.abs(w.y-ay)*a), nh=nw/a;
+  f.w=nw; f.h=nh; f.x=(k===1||k===2)?ax:ax-nw; f.y=(k===2||k===3)?ay:ay-nh;
+}
+function drawPageFrames(){
+  const pages=P.pres.pages||[], auto=!pages.length, b=allBounds();
+  const fr=auto?(b?[frameAround(b,pdfDiagramBox(0,0))]:[]):pages;
+  ctx.save();
+  ctx.textBaseline="middle"; ctx.font="700 12px Arial";
+  fr.forEach((f,i)=>{
+    const a=worldToScreen(f), fw=f.w*cam.scale, fh=f.h*cam.scale, col=auto?"#6b7885":pageColor(i);
+    ctx.globalAlpha=.06; ctx.fillStyle=col; ctx.fillRect(a.x,a.y,fw,fh); ctx.globalAlpha=1;
+    ctx.setLineDash(auto?[8,6]:[]); ctx.lineWidth=2.5; ctx.strokeStyle=col; ctx.strokeRect(a.x,a.y,fw,fh);
+    ctx.setLineDash([]);
+    const c=frameChip(f,i,auto);
+    ctx.fillStyle=col; roundRect(ctx,c.x,c.y,c.w,c.h,5); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.textAlign="left"; ctx.fillText(c.label,c.x+8,c.y+10);
+    if(c.del){
+      ctx.globalAlpha=.45; ctx.fillRect(c.del.x,c.y+4,1,c.h-8); ctx.globalAlpha=1;   // divider before the ×
+      ctx.font="700 15px Arial"; ctx.textAlign="center"; ctx.fillText("×",c.del.x+c.del.w/2,c.y+10); ctx.font="700 12px Arial";
+    }
+    if(!auto) frameCorners(f).forEach(c=>{
+      const p=worldToScreen(c);
+      ctx.beginPath(); ctx.arc(p.x,p.y,lastPtrType==="touch"?10:7,0,7);
+      ctx.fillStyle="#fff"; ctx.fill(); ctx.lineWidth=2.5; ctx.strokeStyle=col; ctx.stroke();
+    });
+  });
+  ctx.restore();
+}
+function pagesOptbarHTML(){
+  const n=(P.pres.pages||[]).length, dv='<div class="div"></div>', g=t=>'<div class="ob-grp">'+t+'</div>';
+  const seg=(v,l)=>'<button class="chip'+(n===v?' on':'')+'" data-pgcount="'+v+'">'+l+'</button>';
+  const full=n>=MAX_PDF_PAGES;
+  const tip = n>2 ? 'Page 1 prints above the prices; pages 2–'+n+' each get a page of their own · × on a label removes that page'
+    : n===2 ? 'Page 1 prints above the prices; page 2 gets a page of its own · pan to another area and tap + Page for more'
+    : n ? 'Only what is inside the frame prints on page 1 · pan to another area and tap + Page to give it its own page'
+    : 'The whole drawing prints on page 1 — pick 1 or 2 pages, or + Page, to frame it yourself';
+  return '<span class="ob-title">PDF PAGES</span>'+dv
+    + g(seg(0,"Auto fit")+seg(1,"1 page")+seg(2,"2 pages")+(n>2?'<span class="chip on">'+n+' pages</span>':'')
+      + '<button class="chip" id="opPgAdd"'+(full?' disabled title="'+MAX_PDF_PAGES+' pages is the limit"':' title="Add a diagram page framed on what you see now"')+'>+ Page</button>')
+    + (n?dv+g('<button class="chip" id="opPgRefit">Re-fit to drawing</button>'):'')
+    + dv+g('<button class="chip" id="opPgPreview">Preview PDF</button>')
+    + '<span class="mini" style="color:var(--text-soft)">'+tip+'</span>';
+}
+function wirePagesOptbar(){
+  document.querySelectorAll("#optbar [data-pgcount]").forEach(b=>b.onclick=()=>setPdfPageCount(+b.dataset.pgcount));
+  const ad=document.getElementById("opPgAdd");
+  if(ad) ad.onclick=addPdfPage;
+  const rf=document.getElementById("opPgRefit");
+  if(rf) rf.onclick=()=>{ P.pres.pages=autoPageFrames(P.pres.pages.length); recordHistory(); scheduleSave(); draw(); };
+  const pv=document.getElementById("opPgPreview");
+  if(pv) pv.onclick=()=>setPage("pdf");
+}
 
 /* ---------- contextual options bar ---------- */
 function colorOptions(sel,brand){
@@ -2507,8 +2708,10 @@ function buildOptbar(){
   // text is a reliable identity key (it even changes per custom product).
   const oldTitle=ob.querySelector(".ob-title"), oldLeft=ob.scrollLeft;
   const oldKey=oldTitle?oldTitle.textContent:"";
+  if(tool==="pages") h=pagesOptbarHTML();
   ob.innerHTML=h;
   wireOptbar();
+  if(tool==="pages") wirePagesOptbar();
   const newTitle=ob.querySelector(".ob-title");
   ob.scrollLeft=((newTitle?newTitle.textContent:"")===oldKey)?oldLeft:0;
   updateOptbarFades();
@@ -2873,6 +3076,8 @@ function abortSingleTouch(){
   drawing=null; gutterExtend=null;
   press=null; arrowDrag=null; textResize=null; vertexDrag=null; marquee=null; pendingTap=null;
   panning=null;
+  // a pinch mid frame-drag puts the frame back rather than leaving an unrecorded half-move
+  if(frameDrag){ const f=(P.pres.pages||[])[frameDrag.i]; if(f) Object.assign(f,frameDrag.orig); frameDrag=null; }
   setHint(toolHint(tool)); draw();
 }
 function applyGesture(){
@@ -2935,6 +3140,14 @@ function onDown(e){
     canvas.setPointerCapture(e.pointerId); canvas.style.cursor="grabbing"; return;
   }
   if(e.button!==0) return;
+  if(tool==="pages"){
+    const fp=evtPos(e), fh=pageFrameHit(fp);
+    if(fh&&fh.del){ removePdfPage(fh.i); return; }
+    if(fh) frameDrag={i:fh.i, corner:fh.corner, start:screenToWorld(fp), orig:{...P.pres.pages[fh.i]}};
+    // empty space pans, so one finger can get around a big job while framing it
+    else panning={x:e.clientX,y:e.clientY,camx:cam.x,camy:cam.y};
+    canvas.setPointerCapture(e.pointerId); return;
+  }
   if(editing && editing.kind==="dsnote") return; // keypad stays open until ✓ Done
   commitEditor();
   const pt=evtPos(e); const w=screenToWorld(pt);
@@ -3049,6 +3262,7 @@ function onMove(e){
     cam.y=panning.camy-(e.clientY-panning.y)/cam.scale;
     draw(); return;
   }
+  if(frameDrag){ dragPageFrame(w); draw(); return; }
   if(erasing){ cursorW=w; eraseStrokesAt(w, eraserRadiusWorld(), erasing); draw(); return; }
   // hover cursor for drawing tools
   if(["gutter","custom","ds","valley","splash","stamp","arrow","text","hl"].includes(tool)){
@@ -3137,6 +3351,7 @@ function onUp(e){
     }
   }
   if(panning){ panning=null; canvas.style.cursor=(tool==="hand"?"grab":(tool==="select"?"default":"crosshair")); return; }
+  if(frameDrag){ frameDrag=null; recordHistory(); scheduleSave(); return; }
   if(erasing){ erasing=null; refreshAll(); return; }
   if(arrowDrag){ arrowDrag=null; recordHistory(); return; }
   if(vertexDrag){ vertexDrag=null; recordHistory(); refreshAll(); return; }
@@ -3767,9 +3982,9 @@ function buildEstimatePane(){
   if(P.settings.payMethod==="card" && r.cardFee>0)
     h+=`<div class="totline foot"><span>Card fee (${P.settings.cardFee}%)</span><span class="v">${money(r.cardFee)}</span></div>`;
 
-  h+=`<div class="totline grand"><span>Turnkey Total</span><span class="v">${money(r.grand)}</span></div>`;
+  // same order as the PDF: deposit, then the total last
   h+=`<div class="totline foot"><span>${P.settings.depositPct}% Deposit</span><span class="v">${money(r.deposit)}</span></div>`;
-  h+=`<div class="totline foot"><span>Balance on completion</span><span class="v">${money(r.remaining)}</span></div>`;
+  h+=`<div class="totline grand"><span>Turnkey Total</span><span class="v">${money(r.grand)}</span></div>`;
 
   h+=`<div class="note" style="margin-top:12px">Quantities update automatically as you draw. Editable fields (diverters, leaf guard) are entered by hand. Splash blocks are placed on the diagram with the SPL tool. Highlight demo / misc areas with the highlighter tool and enter the dollar amount under <b>Pricing → Misc / Demo / Labor</b>.</div>`;
 
@@ -4503,25 +4718,6 @@ byId("photoInput").onchange=e=>{
   e.target.value="";
 };
 
-byId("btnTitleImg").onclick=()=>byId("titleInput").click();
-byId("titleInput").onchange=e=>{
-  const f=e.target.files[0]; if(!f){ return; }
-  const rd=new FileReader();
-  rd.onload=()=>{
-    recordHistory();
-    const id=newPhotoId(); putBlob(id,rd.result);   // meta holds the id, never the image
-    P.meta.titleImage=id;
-    renderPhotos(); saveLocal();
-  };
-  rd.readAsDataURL(f);
-  e.target.value="";
-};
-function removeTitleImage(){
-  recordHistory();
-  P.meta.titleImage="";      // blob is left in the store so undo can bring it back; GC'd at startup
-  renderPhotos(); saveLocal();
-}
-
 function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
   for(const st of ph.strokes){
     const type=st.type||"pen";
@@ -4564,19 +4760,8 @@ function renderPhotos(){
   photoRedraws.clear();                       // the old cards' closures are dead
   const live=new Set((P.photos||[]).map(p=>p.id));
   [...photoImgCache.keys()].forEach(k=>{ if(!live.has(k)) photoImgCache.delete(k); });
-  if(P.meta.titleImage){
-    const tc=document.createElement("div"); tc.className="photo-card title-card";
-    tc.innerHTML=`<div class="title-tag">TITLE IMAGE — first page of estimate</div>
-      <img class="title-preview" src="${photoSrc(P.meta.titleImage)}">
-      <div class="pc-bar"><span style="flex:1;font-size:11px;color:#33455a;font-weight:700">Cover photo</span>
-        <button class="btn-sm" data-titlechg>Replace</button>
-        <button class="btn-sm danger" data-titledel>Remove</button></div>`;
-    scroll.appendChild(tc);
-    tc.querySelector("[data-titlechg]").onclick=()=>byId("titleInput").click();
-    tc.querySelector("[data-titledel]").onclick=removeTitleImage;
-  }
   if(!P.photos.length){
-    if(!P.meta.titleImage) scroll.innerHTML=`<div class="photo-empty">No photos yet — click “Add photos” to import.</div>`;
+    scroll.innerHTML=`<div class="photo-empty">No photos yet — click “Add photos” to import.</div>`;
     return;
   }
   P.photos.forEach((ph,idx)=>{
@@ -5052,6 +5237,20 @@ async function photoSnapshot(ph){
     im.src=photoSrc(ph.id);
   });
 }
+/* Price rows above the Turnkey Total bar, as [label html, value, class]. Deposit sits directly above
+   the total and there's no balance line: the total is the last, biggest thing on the page. Shared
+   with pdfDiagramBox(), which counts them to size page 1's diagram box. */
+function pdfPriceRows(s,r){
+  return [
+    (+s.miscDemoLabor)?["Misc / Demo / Labor",money(s.miscDemoLabor)]:null,
+    r.customTotal?["Custom products",money(r.customTotal)]:null,
+    r.demoAmount?[`Demo (${ftStr(r.demoFeet)})`,money(r.demoAmount)]:null,
+    ...(r.screenRows||[]).map(sc=>[`Gutter screen — ${esc(sc.name)} (${ftStr(sc.feet)})`,money(sc.amount)]),
+    ...(r.hasDiscount?[["Standard price",money(r.listTurnkey)],[`${esc(discountLabel(s))} (${r1(r.discountPct)}%)`,"−"+money(r.discountAmt),"disc"]]:[]),
+    s.payMethod==="card"&&r.cardFee?[`Card fee (${s.cardFee}%)`,money(r.cardFee)]:null,
+    [`${s.depositPct}% Deposit`,money(r.deposit),"dep"],
+  ].filter(Boolean);
+}
 /* The estimate document as one HTML string, for the chosen option indexes. PDF View paginates
    exactly this (natively in the app), and Share / Print export that same result. */
 async function buildEstimateHTML(chosen){
@@ -5087,11 +5286,29 @@ async function buildEstimateHTML(chosen){
     return `<div class="notes avoid"><h3 class="sec">Notes</h3>`+
       ns.map(n=>`<p>${esc(n.text.trim())}</p>`).join("")+`</div>`;
   };
-  let optionSections="";
+  // Page-1 header. Empty fields are dropped rather than printed as blank boxes — the card has
+  // to stay short so the diagram below it gets the page.
+  const brandHead=`<div class="brand"><div><div class="bname">Prime Seamless Gutters &amp; Roofing</div><div class="bcontact">San Antonio &nbsp;·&nbsp; (210) 246-3931 &nbsp;·&nbsp; info@primeseamless.com</div></div>
+      <div class="bmeta"><div class="blbl">Commercial / Residential Estimate</div>${esc(fmtDate(m.date))} &nbsp;·&nbsp; Quote good for 30 days</div></div>`;
+  const miniHead=`<div class="brand mini"><div class="bname">Prime Seamless Gutters &amp; Roofing</div><div class="bmeta">${m.name?esc(m.name)+" &nbsp;·&nbsp; ":""}${esc(fmtDate(m.date))}</div></div>`;
+  const cf=(label,val,big)=>String(val||"").trim()?`<div class="cf"><span class="cl">${label}</span><span class="cv${big?" big":""}">${esc(String(val).trim())}</span></div>`:"";
+  const rep=[m.salesperson,fmtPhone(m.salespersonPhone)].map(v=>String(v||"").trim()).filter(Boolean).join("  ·  ");
+  const custCols=[cf("Customer",m.name,1)+cf("Address",m.address),
+    cf("Phone",fmtPhone(m.phone))+cf("Cell",fmtPhone(m.cell))+cf("E-mail",m.email),
+    cf("Gate code",m.gateCode)+cf("Prepared by",rep)].filter(Boolean);
+  const custCard=custCols.length?`<div class="cust" style="grid-template-columns:${custCols.map((c,i)=>i?"1fr":"1.3fr").join(" ")}">${custCols.map(c=>`<div>${c}</div>`).join("")}</div>`:"";
+
+  // Each option: a diagram page (header, diagram, prices) up front; its colors, materials,
+  // terms and notes go on the last page(s) of the document.
+  let diagramPages="", detailPages="";
   for(let k=0;k<chosen.length;k++){
     const opt=OPTIONS[chosen[k]]; if(!opt) continue;
     P.settings=opt.settings; P.objects=opt.objects; ensurePrices();
-    const diagram = diagramSVG();   // vector, not a canvas PNG — stays sharp through CRM upload + print
+    // vector, not a canvas PNG — stays sharp through CRM upload + print. Frames from the PDF pages
+    // tool pick what each page shows; none = auto-fit the whole drawing onto page 1.
+    const frames=(opt.pres&&opt.pres.pages)||[], nPg=frames.length;
+    const diagram = diagramSVG(frames[0]);
+    const laterDiagrams = frames.slice(1).map(f=>diagramSVG(f));
     const s=P.settings; const r=compute();
     const gBrand=s.gutterBrand||"Spectra", dBrand=s.downspoutBrand||"Spectra"; brandSet.add(gBrand); brandSet.add(dBrand);
     for(const o of P.objects){ if(o.t==="gutter") addRole(effBrand(o),o.color||s.gutterColor,"Gutter"); else if(o.t==="ds") addRole(effBrand(o),o.color||s.downspoutColor,"Downspout"); }
@@ -5099,24 +5316,25 @@ async function buildEstimateHTML(chosen){
     const mats=materialList();
     const matRows=mats.map(x=>{ const sw=`<span class="msw" style="background:${swatchHex(x.color,x.brand)}"></span>`; const name=x.color?(/^#/.test(x.color)?"":esc(x.color)):""; const colTxt=x.color?((x.brand?esc(x.brand)+" ":"")+name):"—"; return `<tr><td>${esc(x.item)}</td><td class="n">${x.qty} ${x.unit}</td><td>${x.color?sw:""}${colTxt}</td></tr>`; }).join("");
     const materialHTML = mats.length ? `<div class="mat-list avoid"><h3 class="sec">Material List</h3><table class="mat"><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th>Color</th></tr></thead><tbody>${matRows}</tbody></table></div>` : "";
-    const totalsTable=`<table class="tot avoid">
-      <tr><td>Total gutter footage</td><td class="n">${ftStr(r.gutterFootage)}</td></tr>
-      <tr><td>Downspout footage</td><td class="n">${ftStr(r.dsFootage)}</td></tr>
-      ${(+s.miscDemoLabor)?`<tr><td>Misc / Demo / Labor</td><td class="n">${money(s.miscDemoLabor)}</td></tr>`:""}
-      ${r.customTotal?`<tr><td>Custom products</td><td class="n">${money(r.customTotal)}</td></tr>`:""}
-      ${r.demoAmount?`<tr><td>Demo (${ftStr(r.demoFeet)})</td><td class="n">${money(r.demoAmount)}</td></tr>`:""}
-      ${(r.screenRows||[]).map(sc=>`<tr><td>Gutter screen — ${esc(sc.name)} (${ftStr(sc.feet)})</td><td class="n">${money(sc.amount)}</td></tr>`).join("")}
-      ${r.hasDiscount?`<tr><td>Standard price</td><td class="n">${money(r.listTurnkey)}</td></tr>
-      <tr class="disc"><td>${esc(discountLabel(s))} (${r1(r.discountPct)}%)</td><td class="n">−${money(r.discountAmt)}</td></tr>`:""}
-      ${s.payMethod==="card"&&r.cardFee?`<tr><td>Card fee (${s.cardFee}%)</td><td class="n">${money(r.cardFee)}</td></tr>`:""}
-      <tr class="grand"><td>Turnkey Total</td><td class="n"><span class="totcirc">${money(r.grand)}</span></td></tr>
-      <tr><td>${s.depositPct}% Deposit</td><td class="n">${money(r.deposit)}</td></tr>
-      <tr><td>Balance on completion</td><td class="n">${money(r.remaining)}</td></tr>
-    </table>
-    <p class="muted cardnote">Payment processing: a <b>${r1(+s.cardFee||0)}% fee</b> applies to all credit &amp; debit card payments and a <b>${r1(+s.amexFee||0)}% fee</b> applies to American Express. No fee for cash or check.</p>`;
-    const diagramHTML = diagram ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">${showHeads?esc(opt.name)+" — ":""}Diagram</h3>${diagram}</div>` : "";
-    const head = showHeads ? `<h2 class="opt-title">${esc(opt.name)} — ${money(r.grand)}</h2>` : "";
-    optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimerFor(s,opt)}${notesFor(opt)}</section>${diagramHTML}`;
+    const priceRows=pdfPriceRows(s,r).map(([l,v,cls])=>`<tr${cls?` class="${cls}"`:""}><td>${l}</td><td class="n">${v}</td></tr>`).join("");
+    // footage isn't a price, so it lives in the summary beside the price stack
+    const priceBlock=`<div class="price">
+      <div class="summary"><div class="cl">Job summary</div><div class="stats">
+        <div class="stat"><span>Gutter</span><b>${ftStr(r.gutterFootage)}</b></div>
+        <div class="stat"><span>Downspout</span><b>${ftStr(r.dsFootage)}</b></div></div></div>
+      <div class="stack"><table class="tot">${priceRows}</table>
+        <div class="grand"><span>Turnkey Total</span><span class="gv">${money(r.grand)}</span></div></div>
+    </div>
+    <p class="cardnote">A ${r1(+s.cardFee||0)}% fee applies to credit &amp; debit card payments and ${r1(+s.amexFee||0)}% to American Express. No fee for cash or check.</p>`;
+    const stripTxt=n=>[showHeads?esc(opt.name):"", nPg>1?`Diagram page ${n} of ${nPg}`:""].filter(Boolean).join(" — ");
+    const strip = stripTxt(1) ? `<div class="optstrip">${stripTxt(1)}</div>` : "";
+    const boxOf=pg=>pdfBoxFor(pg,{meta:m, settings:s, r, nPages:frames.length, first:k===0, multi:showHeads});
+    diagramPages += `<section class="p1${k>0?" pgbreak":""}">${k===0?brandHead+custCard:miniHead}${strip}${diagram?`<div class="dg" style="height:${boxOf(0).h}px">${diagram}</div>`:""}${priceBlock}</section>`;
+    // later pages follow their own page 1, so an option's diagram pages stay together
+    laterDiagrams.forEach((svg,j)=>{
+      if(svg) diagramPages += `<section class="p1 pgbreak">${miniHead}<div class="optstrip">${stripTxt(j+2)}</div><div class="dg" style="height:${boxOf(1).h}px">${svg}</div></section>`;
+    });
+    detailPages += `<section class="details pgbreak"><h2 class="dtitle">${showHeads?esc(opt.name)+" — ":""}Job Details</h2>${colorBlock}${materialHTML}${disclaimerFor(s,opt)}${notesFor(opt)}</section>`;
   }
   // restore the live (active) option
   P.settings=OPTIONS[savedActive].settings; P.objects=OPTIONS[savedActive].objects; ensurePrices();
@@ -5135,7 +5353,6 @@ async function buildEstimateHTML(chosen){
   let photosHTML="";
   if(photos.length){ photosHTML=`<h3 class="sec photo-head">Job Photos</h3>`; for(let i=0;i<photos.length;i+=4){ const cells=photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join(""); photosHTML+=`<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`; } }
   const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
-  const titleImgHTML = m.titleImage ? `<div class="title-hero"><img src="${photoSrc(m.titleImage)}"></div>` : "";
 
   const wYears = String(m.warrantyYears||"").trim();
   const warrantyHTML = wYears ? `<div class="warranty">
@@ -5146,8 +5363,6 @@ async function buildEstimateHTML(chosen){
 
   const css=`*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
     body{font-family:Arial,Helvetica,sans-serif;color:#1b2530;margin:0;padding:26px}
-    h1{color:#c8202a;font-size:22px;margin:0}
-    .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #c8202a;padding-bottom:8px;margin-bottom:14px}
     .muted{color:#5b6b7a;font-size:12px}
     .warranty{break-inside:avoid;page-break-inside:avoid;margin-top:14px}
     .warranty p{font-size:12px;line-height:1.5;color:#2a3846;margin:6px 0}
@@ -5155,22 +5370,43 @@ async function buildEstimateHTML(chosen){
     .notes p{font-size:12px;line-height:1.5;color:#2a3846;margin:6px 0;white-space:pre-wrap}
     .terms-p{white-space:pre-wrap}
     table{border-collapse:collapse;width:100%;font-size:12.5px}
-    .info td{padding:3px 6px;border:1px solid #d9e0e7}
-    .ws th{background:#1b2530;color:#fff;text-align:left;padding:6px 8px;font-size:11px}
-    .ws td{border-bottom:1px solid #e3e8ee;padding:5px 8px}
-    .ws td.n{text-align:right;font-family:'Courier New',monospace}
-    .tot{margin-top:12px;width:320px;margin-left:auto;font-size:13px}
-    .tot td{padding:5px 8px;border-bottom:1px solid #e3e8ee}
-    .tot td.n{text-align:right;font-family:'Courier New',monospace;font-weight:700}
+    /* Diagram page: header, diagram, prices. The diagram box's height is set inline (pdfBoxFor) so the
+       page adds up to PDF_BUDGET_H and the job summary can't be pushed onto the next page. */
+    .p1{break-inside:avoid;page-break-inside:avoid}
+    .pgbreak{break-before:page;page-break-before:always}
+    .brand{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;border-bottom:2.5px solid #c8202a;padding-bottom:7px}
+    .bname{color:#c8202a;font-size:19px;font-weight:800}
+    .bcontact{color:#5b6b7a;font-size:10.5px;margin-top:3px}
+    .bmeta{text-align:right;font-size:10.5px;color:#5b6b7a;line-height:1.45;white-space:nowrap}
+    .blbl{font-size:8.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:#1b2530}
+    .brand.mini{align-items:baseline;padding-bottom:5px}
+    .brand.mini .bname{font-size:14px}
+    .cust{display:grid;gap:0 18px;background:#f3f6f9;border:1px solid #e1e7ed;border-radius:7px;padding:6px 12px 3px;margin-top:9px}
+    .cf{margin-bottom:4px;min-width:0}
+    .cl{display:block;font-size:8.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#7a8896}
+    .cv{display:block;font-size:11.5px;line-height:1.3;overflow-wrap:anywhere}
+    .cv.big{font-size:13.5px;font-weight:700}
+    .optstrip{margin-top:9px;font-size:13px;font-weight:700;padding:5px 10px;background:#eef2f6;border-left:4px solid #c8202a;border-radius:3px}
+    .dg{position:relative;box-sizing:border-box;margin-top:9px;border:1px solid #d9e0e7;border-radius:6px;overflow:hidden}
+    /* the svg's own preserveAspectRatio (meet) fits portrait and landscape houses into the box */
+    .dg svg{position:absolute;left:0;top:0;width:100%;height:100%;display:block}
+    .price{display:flex;gap:18px;align-items:flex-end;margin-top:9px;break-inside:avoid;page-break-inside:avoid}
+    .summary{flex:1;min-width:0}
+    .stats{display:flex;gap:8px;margin-top:4px}
+    .stat{flex:1;background:#f3f6f9;border:1px solid #e1e7ed;border-radius:6px;padding:6px 10px}
+    .stat span{display:block;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#5b6b7a}
+    .stat b{display:block;font-size:17px;margin-top:1px}
+    .stack{width:3.5in;flex:0 0 auto}
+    .tot{font-size:12px}
+    .tot td{padding:4px 8px;border-bottom:1px solid #e8edf2}
+    .tot td.n{text-align:right;font-weight:700;white-space:nowrap}
     .tot tr.disc td{color:#c8202a;font-weight:700}
-    .grand td{background:#1b2530;color:#fff;font-size:15px;border:0}
-    .grand td.n{padding:8px 10px}
-    .totcirc{display:inline-block;border:2.5px solid #c8202a;border-radius:50%;padding:5px 15px;line-height:1;font-weight:700}
-    .cardnote{width:320px;margin:6px 0 0 auto;font-size:11px;line-height:1.45}
-    /* max-height leaves room for the "Diagram" heading so a tall (portrait) diagram +
-       heading still fit one printable page — at 9in WKWebView's print path spilled a blank page */
-    .diagram{border:1px solid #d9e0e7;border-radius:6px;width:100%;height:auto;max-width:100%;max-height:8.5in;display:block;margin:6px auto 0}
-    .diagram-page{break-before:page;page-break-before:always;break-inside:avoid;page-break-inside:avoid}
+    .tot tr.dep td{font-size:13px;font-weight:700;border-bottom:0;padding-top:6px}
+    .grand{display:flex;justify-content:space-between;align-items:center;background:#1b2530;color:#fff;border-left:5px solid #c8202a;border-radius:6px;padding:8px 12px;margin-top:3px}
+    .grand span{font-size:14px;font-weight:700}
+    .grand .gv{font-size:22px;font-weight:800}
+    .cardnote{margin:5px 0 0;font-size:9.5px;color:#5b6b7a;text-align:right}
+    .dtitle{font-size:18px;color:#1b2530;margin:0 0 10px;padding-bottom:6px;border-bottom:2.5px solid #c8202a}
     .chart-page{break-before:page;page-break-before:always}
     .photo-head{break-before:page;page-break-before:always}
     .photo-page{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;break-inside:avoid;page-break-inside:avoid}
@@ -5198,34 +5434,21 @@ async function buildEstimateHTML(chosen){
     thead{display:table-header-group}
     tr{break-inside:avoid;page-break-inside:avoid}
     .cc{break-inside:avoid;page-break-inside:avoid}
-    @page{margin:0.5in}
+    @page{margin:${geNative("gutterPdf")?"0":"0.5in"}}
     /* hide the on-screen Print button by default so the print formatter (incl. WKWebView,
        which doesn't always honor @media print) never paginates it onto a trailing blank page */
-    .opt-title{color:#1b2530;font-size:17px;margin:18px 0 8px;padding:7px 10px;background:#eef2f6;border-left:5px solid #c8202a;border-radius:4px}
-    .title-hero{margin:14px 0 4px;break-inside:avoid;page-break-inside:avoid;text-align:center}
-    .title-hero img{max-width:100%;max-height:520px;width:auto;border-radius:8px;border:1px solid #d9e0e7}
     .mat-list{margin-top:14px}
-    .option-sec.optbreak{break-before:page;page-break-before:always}
     .noprint{display:none}
     @media screen{.noprint{display:inline-block}}
     @media print{.noprint{display:none} .chart{grid-template-columns:repeat(4,1fr)} body{padding:0}}`;
 
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Estimate ${esc(m.name||"")}</title><style>${css}</style></head><body>
-    <div class="head">
-      <div><h1>Prime Seamless Gutters &amp; Roofing</h1><div class="muted">San Antonio &nbsp;|&nbsp; (210) 246-3931 &nbsp;|&nbsp; info@primeseamless.com</div></div>
-      <div class="muted" style="text-align:right">Commercial / Residential Estimate<br>${esc(fmtDate(m.date))}<br>Quote good for 30 days</div>
-    </div>
-    <table class="info"><tr><td><b>Name</b></td><td>${esc(m.name)}</td><td><b>Phone</b></td><td>${esc(fmtPhone(m.phone))}</td></tr>
-      <tr><td><b>Address</b></td><td>${esc(m.address)}</td><td><b>Cell</b></td><td>${esc(fmtPhone(m.cell))}</td></tr>
-      <tr><td><b>E-mail</b></td><td>${esc(m.email)}</td><td><b>Gate code</b></td><td>${esc(m.gateCode)}</td></tr>
-      <tr><td><b>Salesperson</b></td><td>${esc(m.salesperson)}</td><td><b>Salesperson phone</b></td><td>${esc(fmtPhone(m.salespersonPhone))}</td></tr>
-      <tr><td><b>Date</b></td><td>${esc(fmtDate(m.date))}</td><td></td><td></td></tr></table>
-    ${titleImgHTML}
-    ${optionSections}
+    ${diagramPages}
     ${colorChartHTML}
     ${warrantyHTML}
     ${photosHTML}
     ${infoPageHTML}
+    ${detailPages}
     <button class="noprint" onclick="window.print()" style="padding:10px 16px;background:#c8202a;color:#fff;border:0;border-radius:8px;font-weight:700;cursor:pointer">Print this estimate</button>
     </body></html>`;
   return html;
@@ -5267,6 +5490,11 @@ function buildPdfOpts(){
 async function refreshPdfView(){
   if(curPage!=="pdf") return;
   buildPdfOpts();
+  // the active option's diagram: flag an auto-fit page 1 that will print too small to read
+  const crowd=diagramCrowded(), pb=byId("pdfPagesBtn");
+  pb.classList.toggle("attn",crowd);
+  pb.textContent=crowd?"⚠ Crowded diagram — set pages":"▭ Diagram pages";
+  pb.title=crowd?"This job is big for one page — frame it across two diagram pages so the labels stay readable":"Choose what each PDF diagram page shows";
   const seq=++pdfSeq;
   const chosen=OPTIONS.map((o,i)=>i).filter(i=>!pdfOptOff.has(String(OPTIONS[i].id)));
   const host=byId("pdfHost");
@@ -5299,6 +5527,7 @@ function pdfExport(action){
   setTimeout(()=>{ try{win.focus();win.print();}catch(e){} },350);
 }
 byId("pdfRefresh").onclick=()=>refreshPdfView();
+byId("pdfPagesBtn").onclick=()=>{ setPage("diagram"); setTool("pages"); };
 byId("pdfShare").onclick=()=>pdfExport("share");
 byId("pdfPrint").onclick=()=>pdfExport("print");
 byId("btnPrint").onclick=()=>setPage("pdf");
@@ -5306,7 +5535,7 @@ byId("btnPrint").onclick=()=>setPage("pdf");
 /* ============================================================ */
 /* KEYBOARD                                                    */
 /* ============================================================ */
-const TOOLKEYS={v:"select",h:"hand",g:"gutter",d:"ds",s:"valley",b:"splash",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
+const TOOLKEYS={v:"select",h:"hand",p:"pages",g:"gutter",d:"ds",s:"valley",b:"splash",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
 window.addEventListener("keydown",e=>{
   const tag=(e.target.tagName||"").toLowerCase();
   const typing = tag==="input"||tag==="textarea"||tag==="select"||e.target.isContentEditable;
