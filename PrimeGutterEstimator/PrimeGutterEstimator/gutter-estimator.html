@@ -331,6 +331,20 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .title-card .title-preview{display:block;width:520px;max-width:60vw;height:auto}
 .title-card .title-tag{background:#c8202a;color:#fff;font-size:11px;font-weight:800;letter-spacing:.4px;padding:5px 9px}
 
+/* PDF view page — same overlay idiom as #photoStage. In the app a native PDFView is laid over
+   #pdfHost (the web side only reports its rect); in a plain browser #pdfHost holds an iframe. */
+#pdfStage{position:absolute;inset:0;display:none;flex-direction:column;background:#6b7885}
+#pdfBar{min-height:46px;background:var(--ink);display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:7px 14px;color:#dce6ef;flex:0 0 auto}
+#pdfBar .tb-spacer{flex:1 1 0;min-width:0}
+#pdfOpts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+#pdfOpts label{display:inline-flex;gap:6px;align-items:center;background:#2c3c4d;border:1px solid #3a4d61;border-radius:7px;padding:5px 9px;font-weight:700;font-size:12px;cursor:pointer}
+#pdfOpts input{margin:0}
+#pdfStatus{color:#9fb0c0;font-size:12px}
+#pdfHost{flex:1;position:relative;overflow:hidden;padding:14px}
+#pdfHost iframe{display:block;width:100%;max-width:8.5in;height:100%;margin:0 auto;border:0;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.pdf-empty{color:#fff;text-align:center;margin-top:40px;font-weight:700}
+@media (max-width:1100px){ #pdfBarTitle{display:none} }
+
 /* modal */
 #modalWrap{position:fixed;inset:0;background:rgba(15,22,30,.55);z-index:50;display:none;align-items:center;justify-content:center;padding:20px}
 .modal{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.4)}
@@ -367,6 +381,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
     <div class="page-tabs" style="margin-left:6px">
       <button class="page-tab active" data-page="diagram" id="tabDiagram">Diagram</button>
       <button class="page-tab" data-page="photos" id="tabPhotos">Photos</button>
+      <button class="page-tab" data-page="pdf" id="tabPdf">PDF View</button>
     </div>
     <div class="tb-spacer"></div>
     <button id="saveWarn" title="Tap for details" style="display:none"></button>
@@ -485,6 +500,20 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <button id="psDelete" class="db-del">🗑 <span id="psDelLabel">Delete</span></button>
           <button id="psClear" class="db-x">Deselect</button>
         </div>
+      </div>
+
+      <!-- PDF VIEW — the exact document the customer is sent -->
+      <div id="pdfStage">
+        <div id="pdfBar">
+          <strong id="pdfBarTitle" style="letter-spacing:.4px">PDF VIEW</strong>
+          <div id="pdfOpts"></div>
+          <span id="pdfStatus"></span>
+          <div class="tb-spacer"></div>
+          <button class="tb-btn" id="pdfRefresh" title="Rebuild the PDF">↻ Refresh</button>
+          <button class="tb-btn" id="pdfShare" title="Save to Files, Mail, AirDrop or another app">⇪ Share / Save</button>
+          <button class="tb-btn primary" id="pdfPrint">Print</button>
+        </div>
+        <div id="pdfHost"><div class="pdf-empty" id="pdfEmpty" style="display:none">Choose at least one option to include in the PDF.</div></div>
       </div>
     </div>
   </div>
@@ -634,7 +663,29 @@ function defaultProject(){
       prices:{}                   // per-line unit prices (itemized)
     },
     objects:[],
-    photos:[]                     // {id,name,w,h,strokes:[...]} — image data lives in photoBlobs/IndexedDB
+    photos:[],                    // {id,name,w,h,strokes:[...]} — image data lives in photoBlobs/IndexedDB
+    pres:defaultPres()            // PDF notes + custom terms (per option, like settings/objects)
+  };
+}
+
+/* PDF notes + custom terms, edited in the Job Info rail. Per-option — an option's scope,
+   deposit and caveats differ — so it rides alongside settings/objects on OPTIONS[] and gets
+   swapped by activate()/captureActive(). The key is still "pres" because jobs were saved
+   under that name while the (since removed) Presentation Mode owned it. */
+function defaultPres(){
+  return {
+    notes:[],                     // {id,text} — printed per option, never priced
+    terms:""                      // "" = fall back to the standard generated disclaimer
+  };
+}
+// Same job as ensurePrices: make any project (old save, hand-edited JSON, undo snapshot
+// from before this feature) safe to render without every reader null-checking. Rebuilds
+// rather than patches, so Presentation Mode's old order/ord/pos layout fields fall away.
+function ensurePres(p){
+  if(!p||typeof p!=="object") return defaultPres();
+  return {
+    notes:Array.isArray(p.notes)?p.notes.filter(n=>n&&typeof n==="object").map(n=>({id:n.id||uid(),text:String(n.text||"")})):[],
+    terms:typeof p.terms==="string"?p.terms:""
   };
 }
 
@@ -803,7 +854,8 @@ function rateAtMin(key){
 /* CAMERA / CANVAS                                              */
 /* ============================================================ */
 const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+// let, not const: diagramSVG() briefly points ctx at an SVG recorder to print the diagram as vectors
+let ctx = canvas.getContext("2d");
 let DPR = window.devicePixelRatio||1;
 let railHidden = false;
 let cam = {x:0,y:0,scale:1};   // world->screen: screen = (world - cam)*scale ... we use translate/scale
@@ -824,6 +876,7 @@ function resize(){
   canvas.height= Math.round(h*DPR);
   updateOptbarFades();   // rail toggle / rotation / split view can all end the overflow
   draw();
+  pdfSyncFrame();        // the native PDF overlay doesn't follow web layout on its own
 }
 window.addEventListener("resize",resize);
 window.addEventListener("orientationchange",()=>setTimeout(resize,150));
@@ -1495,19 +1548,11 @@ function roundRect(c,x,y,w,h,r){
 }
 function objById(id){ return P.objects.find(o=>o.id===id); }
 
-draw = function(){
-  if(!ctx) return;
-  if(typeof updateDrawBar==="function") updateDrawBar();
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  ctx.clearRect(0,0,view.w,view.h);
-  labelBoxes=[];
-
-  // paper background fill (full viewport)
-  ctx.fillStyle=getCSS("--paper");
-  ctx.fillRect(0,0,view.w,view.h);
-
-  drawGrid();
-
+/* Everything that belongs to the job itself — no grid, cursors or in-progress drawing.
+   draw() paints it on the canvas and diagramSVG() replays it into the PDF, so anything
+   added here prints; editor-only chrome belongs in draw(). (Selection is still drawn by
+   the individual objects; diagramSVG() empties sel/segSel so it never prints.) */
+function drawScene(){
   // ordered draw: highlights first (under), then gutters, arrows, ds, valley, stamps, text on top
   const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,splash:4,stamp:5,text:6};
   const objs=[...P.objects].sort((a,b)=>(order[a.t]||9)-(order[b.t]||9));
@@ -1522,6 +1567,21 @@ draw = function(){
     if(n){ const a=n*2.0944; sp.x+=Math.cos(a)*9; sp.y+=Math.sin(a)*9; }
     drawMiterMark(sp, c.bay);
   }
+}
+
+draw = function(){
+  if(!ctx) return;
+  if(typeof updateDrawBar==="function") updateDrawBar();
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.clearRect(0,0,view.w,view.h);
+  labelBoxes=[];
+
+  // paper background fill (full viewport)
+  ctx.fillStyle=getCSS("--paper");
+  ctx.fillRect(0,0,view.w,view.h);
+
+  drawGrid();
+  drawScene();
 
   // in-progress drawing
   drawInProgress();
@@ -1953,6 +2013,120 @@ function drawHL(o){ paintStroke(o, getCSS("--hl"), null); }
 function drawDemo(o){ paintStroke(o, "#ff3b30", "demo", "DEMO"); }
 function drawScreen(o){ const t=screenTypeDef(o.screenType); paintStroke(o, "#34c759", "screen", t.name); }
 
+/* ---- vector diagram for the PDF ----
+   The PDF used to embed canvas.toDataURL(): a screen-resolution PNG that went unreadable once
+   it was uploaded to the CRM and printed. Instead the SAME draw functions run against this
+   recorder, which turns the 2D-context calls they make into SVG — so the canvas and the printed
+   diagram can't drift apart. It implements only what RENDERING uses; a new ctx call there
+   (drawImage, translate, quadraticCurveTo…) must be added here too or it silently won't print. */
+function makeSvgCtx(){
+  const TAU=Math.PI*2, out=[], stack=[];
+  const n=v=>+(+v).toFixed(2);
+  const xa=v=>String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  const meas=document.createElement("canvas").getContext("2d");   // real metrics, so chips size exactly as on screen
+  const st={fillStyle:"#000",strokeStyle:"#000",lineWidth:1,lineCap:"butt",lineJoin:"miter",
+            font:"10px sans-serif",textAlign:"start",textBaseline:"alphabetic",globalAlpha:1,dash:[]};
+  let d="", cx=0, cy=0;
+  const box={x0:Infinity,y0:Infinity,x1:-Infinity,y1:-Infinity};   // extent of everything emitted, for the viewBox
+  const ext=(x,y,pad)=>{ pad=pad||0; box.x0=Math.min(box.x0,x-pad); box.y0=Math.min(box.y0,y-pad); box.x1=Math.max(box.x1,x+pad); box.y1=Math.max(box.y1,y+pad); };
+  const alpha=()=>st.globalAlpha<1?` opacity="${n(st.globalAlpha)}"`:"";
+  const fillAttr=()=>` fill="${xa(st.fillStyle)}"${alpha()}`;
+  const strokeAttr=()=>` fill="none" stroke="${xa(st.strokeStyle)}" stroke-width="${n(st.lineWidth)}" stroke-linecap="${st.lineCap}" stroke-linejoin="${st.lineJoin}"`+
+    (st.dash.length?` stroke-dasharray="${st.dash.map(n).join(" ")}"`:"")+alpha();
+  const to=(cmd,x,y)=>{ d+=cmd+n(x)+" "+n(y); cx=x; cy=y; ext(x,y,st.lineWidth); };
+  const c={
+    save(){ stack.push(Object.assign({},st,{dash:st.dash.slice()})); },
+    restore(){ const t=stack.pop(); if(t) Object.assign(st,t); },
+    setTransform(){}, clearRect(){},
+    setLineDash(a){ st.dash=(a||[]).slice(); },
+    beginPath(){ d=""; },
+    moveTo(x,y){ to("M",x,y); },
+    lineTo(x,y){ to(d?"L":"M",x,y); },
+    closePath(){ if(d) d+="Z"; },
+    arc(x,y,r,a0,a1,ccw){
+      let sw=ccw?a0-a1:a1-a0;
+      const full=sw>=TAU;                       // the renderers draw circles as arc(x,y,r,0,7)
+      if(!full) sw=((sw%TAU)+TAU)%TAU;
+      const sx=x+r*Math.cos(a0), sy=y+r*Math.sin(a0), f=ccw?0:1;   // canvas is y-down, so clockwise = sweep 1
+      to(d?"L":"M",sx,sy); ext(x,y,r+st.lineWidth);
+      if(full){
+        const ox=x-r*Math.cos(a0), oy=y-r*Math.sin(a0);   // SVG can't arc a full turn: two halves
+        d+=`A${n(r)} ${n(r)} 0 1 ${f} ${n(ox)} ${n(oy)}A${n(r)} ${n(r)} 0 1 ${f} ${n(sx)} ${n(sy)}`;
+        cx=sx; cy=sy;
+      } else {
+        const a=ccw?a0-sw:a0+sw, ex=x+r*Math.cos(a), ey=y+r*Math.sin(a);
+        d+=`A${n(r)} ${n(r)} 0 ${sw>Math.PI?1:0} ${f} ${n(ex)} ${n(ey)}`;
+        cx=ex; cy=ey;
+      }
+    },
+    arcTo(x1,y1,x2,y2,r){                        // roundRect's corners
+      if(!d){ to("M",x1,y1); return; }
+      const v1x=cx-x1, v1y=cy-y1, v2x=x2-x1, v2y=y2-y1;
+      const l1=Math.hypot(v1x,v1y), l2=Math.hypot(v2x,v2y);
+      if(!(r>0) || l1<1e-9 || l2<1e-9 || Math.abs(v1x*v2y-v1y*v2x)<1e-9){ to("L",x1,y1); return; }
+      const ang=Math.acos(Math.max(-1,Math.min(1,(v1x*v2x+v1y*v2y)/(l1*l2))));
+      const t=r/Math.tan(ang/2);
+      to("L",x1+v1x/l1*t,y1+v1y/l1*t);
+      const ex=x1+v2x/l2*t, ey=y1+v2y/l2*t;
+      d+=`A${n(r)} ${n(r)} 0 0 ${(-v1x)*v2y-(-v1y)*v2x>0?1:0} ${n(ex)} ${n(ey)}`;
+      cx=ex; cy=ey; ext(ex,ey,st.lineWidth);
+    },
+    fill(){ if(d) out.push(`<path d="${d}"${fillAttr()}/>`); },
+    stroke(){ if(d) out.push(`<path d="${d}"${strokeAttr()}/>`); },
+    fillRect(x,y,w,h){ ext(x,y); ext(x+w,y+h); out.push(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${fillAttr()}/>`); },
+    strokeRect(x,y,w,h){ ext(x,y,st.lineWidth); ext(x+w,y+h,st.lineWidth); out.push(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${strokeAttr()}/>`); },
+    measureText(t){ meas.font=st.font; return meas.measureText(t); },
+    fillText(t,x,y){
+      // font is always "[weight ]<size>px <family>" in this file
+      const m=/^\s*(?:(\S+)\s+)?([\d.]+)px\s+(.+)$/.exec(st.font)||[];
+      const size=+m[2]||10;
+      const anchor={center:"middle",right:"end",end:"end"}[st.textAlign]||"start";
+      // explicit baseline offsets: dominant-baseline isn't dependable in WebKit's print path
+      const yy=y+({middle:.35,top:.82,hanging:.82,bottom:-.22}[st.textBaseline]||0)*size;
+      const w=c.measureText(t).width, x0=anchor==="middle"?x-w/2:anchor==="end"?x-w:x;
+      ext(x0,y-size); ext(x0+w,y+size);
+      out.push(`<text x="${n(x)}" y="${n(yy)}" font-family="${xa(m[3]||"sans-serif")}" font-size="${n(size)}" font-weight="${xa(m[1]||"400")}" text-anchor="${anchor}" style="white-space:pre"${fillAttr()}>${xa(t)}</text>`);
+    },
+    svgBody(){ return out.join(""); },
+    extent(){ return box; }
+  };
+  ["fillStyle","strokeStyle","lineWidth","lineCap","lineJoin","font","textAlign","textBaseline","globalAlpha"]
+    .forEach(k=>Object.defineProperty(c,k,{get:()=>st[k],set:v=>{ st[k]=v; }}));
+  return c;
+}
+
+/* Page-shaped virtual viewport the diagram is fitted into, same math as zoomFit(). Label and
+   marker sizes are partly screen-constant, so this sets how big they print relative to the
+   house: ~1040 wide scaled onto a 7.5in column matches the old landscape-iPad snapshot. */
+const PRINT_VIEW={w:1040,h:1180};
+function diagramSVG(){
+  const b=P.objects.length?allBounds():null;
+  if(!b) return "";
+  const saved={ctx, cam:{...cam}, view:{...view}, sel, segSel, hover, labelBoxes};
+  let body="", e=null;
+  // finally, always: a throw mid-render must never leave the live canvas drawing into the recorder
+  try{
+    Object.assign(view,PRINT_VIEW);
+    const pad=60;
+    cam.scale=Math.max(.15,Math.min(3,Math.min((view.w-pad*2)/Math.max(1,b.w),(view.h-pad*2)/Math.max(1,b.h))));
+    cam.x=b.x+b.w/2-view.w/(2*cam.scale);
+    cam.y=b.y+b.h/2-view.h/(2*cam.scale);
+    sel=new Set(); segSel=new Set(); hover=null; labelBoxes=[];
+    const rec=makeSvgCtx(); ctx=rec;
+    drawScene();
+    body=rec.svgBody(); e=rec.extent();
+  } finally {
+    ctx=saved.ctx; Object.assign(cam,saved.cam); Object.assign(view,saved.view);
+    sel=saved.sel; segSel=saved.segSel; hover=saved.hover; labelBoxes=saved.labelBoxes;
+  }
+  if(!body || !isFinite(e.x0)) return "";
+  // crop to what was actually drawn (chips and dragged labels overhang objBounds), not the fit box
+  const m=14, vx=e.x0-m, vy=e.y0-m, vw=e.x1-e.x0+m*2, vh=e.y1-e.y0+m*2;
+  const f=v=>+v.toFixed(2);
+  return `<svg class="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="${f(vx)} ${f(vy)} ${f(vw)} ${f(vh)}" width="${f(vw)}" height="${f(vh)}" preserveAspectRatio="xMidYMid meet" style="aspect-ratio:${f(vw)}/${f(vh)}">`+
+    `<rect x="${f(vx)}" y="${f(vy)}" width="${f(vw)}" height="${f(vh)}" fill="#fff"/>${body}</svg>`;
+}
+
 function drawInProgress(){
   if(!drawing) return;
   ctx.save();
@@ -2050,7 +2224,9 @@ function objBounds(o){
     return {x,y,w:Math.max(...xs)-x,h:Math.max(...ys)-y};
   }
   if(o.t==="arrow"){ const x=Math.min(o.x1,o.x2),y=Math.min(o.y1,o.y2);return {x,y,w:Math.abs(o.x2-o.x1),h:Math.abs(o.y2-o.y1)};}
-  if(o.t==="text"){ return {x:o.x,y:o.y,w:o.w,h:o.h}; }
+  // o.h is only filled in by drawText — a job fitted before its first draw (PDF View right after
+  // Open) had h undefined, turning the whole print fit into NaN and dropping the diagram
+  if(o.t==="text"){ return {x:o.x,y:o.y,w:o.w,h:o.h||textHeight(o)}; }
   if(o.t==="ds"||o.t==="valley"||o.t==="splash"||o.t==="stamp"){ return {x:o.x-30,y:o.y-20,w:60,h:50}; }
   return {x:o.x||0,y:o.y||0,w:20,h:20};
 }
@@ -2446,7 +2622,7 @@ function snapAngleW(p, prev){
 /* HISTORY (undo / redo)                                        */
 /* ============================================================ */
 let history=[], hidx=-1, _histPending=false;
-function snapshot(){ return JSON.parse(JSON.stringify({objects:P.objects,settings:P.settings,meta:P.meta,photos:P.photos,nextId})); }
+function snapshot(){ return JSON.parse(JSON.stringify({objects:P.objects,settings:P.settings,meta:P.meta,photos:P.photos,pres:P.pres,nextId})); }
 function recordHistory(){
   // capture the state AFTER the current synchronous mutation completes,
   // so both undo and redo land on correct committed states regardless of
@@ -2473,6 +2649,8 @@ function restore(s){
   P.objects=JSON.parse(JSON.stringify(s.objects));P.settings=JSON.parse(JSON.stringify(s.settings));
   P.meta=JSON.parse(JSON.stringify(s.meta));
   if(s.photos) P.photos=JSON.parse(JSON.stringify(s.photos));
+  // snapshots taken before notes/terms existed have no pres — fall back to defaults
+  P.pres=ensurePres(s.pres?JSON.parse(JSON.stringify(s.pres)):null);
   nextId=s.nextId; sel.clear();
   if(typeof photoSelMarks!=="undefined" && photoSelMarks) photoSelMarks.clear();
   refreshAll();
@@ -2493,13 +2671,13 @@ let optSeq=1;
 
 function captureActive(){
   const o=OPTIONS[activeOpt]; if(!o) return;
-  o.settings=P.settings; o.objects=P.objects; o.history=history; o.hidx=hidx;
+  o.settings=P.settings; o.objects=P.objects; o.history=history; o.hidx=hidx; o.pres=P.pres;
 }
 // point the live state at option i's data + history, then rebuild the UI
 function activate(i){
   const o=OPTIONS[i]; if(!o) return;
   activeOpt=i;
-  P.settings=o.settings; P.objects=o.objects;
+  P.settings=o.settings; P.objects=o.objects; P.pres=o.pres=ensurePres(o.pres);
   history=o.history||[]; hidx=(o.hidx==null?history.length-1:o.hidx);
   sel.clear(); if(typeof segSel!=="undefined"&&segSel) segSel.clear();
   ensurePrices();
@@ -2514,10 +2692,13 @@ function addOption(mode){   // mode: "dup" (copy active drawing+pricing) | "blan
   const src=OPTIONS[activeOpt];
   const settings=JSON.parse(JSON.stringify(src?src.settings:P.settings));
   const objects= mode==="dup" ? JSON.parse(JSON.stringify(src?src.objects:P.objects)) : [];
-  const opt={id:optSeq++, name:"Option "+(OPTIONS.length+1), settings, objects, history:[], hidx:-1};
+  // "dup" copies the notes/terms with the drawing; "blank" starts clean, since its
+  // notes describe content that isn't there.
+  const pres= mode==="dup" ? ensurePres(JSON.parse(JSON.stringify((src&&src.pres)||defaultPres()))) : defaultPres();
+  const opt={id:optSeq++, name:"Option "+(OPTIONS.length+1), settings, objects, pres, history:[], hidx:-1};
   OPTIONS.push(opt);
   activeOpt=OPTIONS.length-1;
-  P.settings=opt.settings; P.objects=opt.objects;
+  P.settings=opt.settings; P.objects=opt.objects; P.pres=opt.pres;
   sel.clear(); if(typeof segSel!=="undefined"&&segSel) segSel.clear();
   ensurePrices();
   byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
@@ -2551,7 +2732,8 @@ function optionTotal(opt){
 }
 // wrap whatever is currently in P into a single "Option 1" (startup / new / legacy load)
 function initSingleOption(){
-  OPTIONS=[{id:optSeq++, name:"Option 1", settings:P.settings, objects:P.objects, history:history, hidx:hidx}];
+  OPTIONS=[{id:optSeq++, name:"Option 1", settings:P.settings, objects:P.objects, pres:ensurePres(P.pres), history:history, hidx:hidx}];
+  P.pres=OPTIONS[0].pres;
   activeOpt=0;
 }
 function buildOptionsBar(){
@@ -3162,16 +3344,17 @@ function onWheel(e){
 }
 
 // hide / show the left price+settings panel to free up screen on small iPads
+// (PDF View also collapses it, so the price worksheet isn't on screen in front of the customer)
+function setRailHidden(h){
+  railHidden=!!h;
+  const rail=document.getElementById("rail"), btn=document.getElementById("railToggle");
+  if(rail) rail.style.display=railHidden?"none":"";
+  if(btn){ btn.textContent=railHidden?"☰":"⟨"; btn.title=railHidden?"Show panel":"Hide panel"; }
+  setTimeout(resize,30);
+}
 (function(){
   const btn=document.getElementById("railToggle");
-  if(btn) btn.onclick=()=>{
-    railHidden=!railHidden;
-    const rail=document.getElementById("rail");
-    if(rail) rail.style.display=railHidden?"none":"";
-    btn.textContent=railHidden?"☰":"⟨";
-    btn.title=railHidden?"Show panel":"Hide panel";
-    setTimeout(resize,30);
-  };
+  if(btn) btn.onclick=()=>setRailHidden(!railHidden);
 })();
 
 /* The hint pill and the Finish / Delete bars are all pinned bottom-centre, and the bars sit on
@@ -3639,6 +3822,15 @@ function buildJobPane(){
   h+=`<div class="fld"><label>Downspout brand</label><select id="jiDsBrand" aria-label="Downspout brand">${brandOpts(downspoutBrand())}</select></div>`;
   h+=`<div class="fld"><label>Downspout color</label><div class="colorsel"><span class="swatch" id="swDs" style="background:${colorHex(P.settings.downspoutColor,downspoutBrand())}"></span><select id="jiDsColor" aria-label="Downspout color">${colorOptions(P.settings.downspoutColor,downspoutBrand())}</select></div></div>`;
   h+=`<div class="note">Pick Spectra or ABC independently for gutters and downspouts — the proposal shows the matching color chart(s). Individual downspouts can override the color via Select or the Downspout tool.</div>`;
+  const multi=OPTIONS.length>1 && OPTIONS[activeOpt];
+  h+=`<div class="sec-h">PDF notes &amp; terms${multi?" — "+esc(OPTIONS[activeOpt].name):""}</div>`;
+  P.pres.notes.forEach(n=>{
+    h+=`<div class="fld" style="display:flex;gap:6px;align-items:flex-start"><textarea data-note="${esc(n.id)}" rows="2" style="flex:1" placeholder="e.g. customer wants black gutters on the north run">${esc(n.text)}</textarea>`+
+       `<button class="btn-sm danger" data-delnote="${esc(n.id)}" title="Delete note">✕</button></div>`;
+  });
+  h+=`<div class="fld"><button class="btn-sm" id="jiAddNote">+ Add note</button></div>`;
+  h+=`<div class="fld"><label>Terms (leave blank for the standard terms)</label><textarea id="jiTerms" rows="5" placeholder="${esc(presDefaultTerms())}">${esc(P.pres.terms)}</textarea></div>`;
+  h+=`<div class="note">Notes and terms print on the PDF${multi?" for this option only":""}.</div>`;
   byId("paneJob").innerHTML=h;
 
   const bind=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ P.meta[key]=e.value; }; };
@@ -3652,6 +3844,21 @@ function buildJobPane(){
   byId("jiDsBrand").onchange=e=>{ P.settings.downspoutBrand=e.target.value; const list=brandColorList(e.target.value); if(!list.some(c=>c.n===P.settings.downspoutColor)) P.settings.downspoutColor=list[0].n; buildJobPane(); refreshAll(); };
   byId("jiGutColor").onchange=e=>{ P.settings.gutterColor=e.target.value; byId("swGut").style.background=colorHex(e.target.value,gutterBrand()); refreshAll(); };
   byId("jiDsColor").onchange=e=>{ P.settings.downspoutColor=e.target.value; byId("swDs").style.background=colorHex(e.target.value,downspoutBrand()); refreshAll(); };
+  // Text commits on change WITHOUT rebuilding the pane: a rebuild on blur replaced the DOM
+  // under the finger, so the tap that ended the edit never reached the field it was aimed at.
+  const pane=byId("paneJob");
+  pane.querySelectorAll("textarea[data-note]").forEach(ta=>{
+    ta.onchange=()=>{ const n=P.pres.notes.find(x=>String(x.id)===ta.dataset.note); if(!n) return; recordHistory(); n.text=ta.value; scheduleSave(); };
+  });
+  pane.querySelectorAll("button[data-delnote]").forEach(b=>{
+    b.onclick=()=>{ recordHistory(); P.pres.notes=P.pres.notes.filter(x=>String(x.id)!==b.dataset.delnote); buildJobPane(); scheduleSave(); };
+  });
+  byId("jiAddNote").onclick=()=>{
+    const n={id:uid(),text:""};
+    recordHistory(); P.pres.notes.push(n); buildJobPane(); scheduleSave();
+    const ta=pane.querySelector('textarea[data-note="'+n.id+'"]'); if(ta) ta.focus();
+  };
+  byId("jiTerms").onchange=e=>{ recordHistory(); P.pres.terms=e.target.value.trim(); scheduleSave(); };
 }
 
 function buildPricingPane(){
@@ -3886,6 +4093,8 @@ function openModal(title,bodyHTML){
   byId("modalTitle").textContent=title;
   byId("modalBody").innerHTML=bodyHTML;
   modalWrap.style.display="flex";
+  // the native PDFView sits above ALL web content — left up, it hid Settings entirely
+  if(curPage==="pdf") pdfNative({action:"hide"});
 }
 // Modals that a caller is awaiting register a dismiss handler here, so closing via
 // the ×, the backdrop or Escape settles the promise instead of hanging the caller.
@@ -3893,6 +4102,7 @@ let _modalOnClose=null;
 function closeModal(){
   modalWrap.style.display="none"; byId("modalBody").innerHTML="";
   const f=_modalOnClose; _modalOnClose=null; if(f) f();
+  if(curPage==="pdf") refreshPdfView();   // Settings may have changed prices; rebuilding also re-shows it
 }
 byId("modalClose").onclick=closeModal;
 modalWrap.addEventListener("mousedown",e=>{ if(e.target===modalWrap) closeModal(); });
@@ -3968,20 +4178,31 @@ function openSettings(){
 byId("btnSettings").onclick=openSettings;
 
 /* ============================================================ */
-/* PAGE SWITCH  (Diagram / Photos)                            */
+/* PAGE SWITCH  (Diagram / Photos / PDF View)                 */
 /* ============================================================ */
 let curPage="diagram";
+let pdfRailWasHidden=false;   // rail state to put back when leaving PDF View
 function setPage(pg){
+  const prev=curPage;
   curPage=pg;
   byId("tabDiagram").classList.toggle("active",pg==="diagram");
   byId("tabPhotos").classList.toggle("active",pg==="photos");
-  const ps=byId("photoStage");
+  byId("tabPdf").classList.toggle("active",pg==="pdf");
+  const ps=byId("photoStage"), fs=byId("pdfStage");
   if(pg==="photos"){ ps.style.display="flex"; ps.style.zIndex="30"; renderPhotos(); if(typeof updateUndoButtons==="function") updateUndoButtons(); }
-  else { if(typeof cancelPhotoLine==="function") cancelPhotoLine(); ps.style.display="none"; resize(); }
+  else { if(typeof cancelPhotoLine==="function") cancelPhotoLine(); ps.style.display="none"; }
+  if(prev==="pdf" && pg!=="pdf"){ pdfNative({action:"hide"}); setRailHidden(pdfRailWasHidden); }
+  if(pg==="pdf"){
+    fs.style.display="flex"; fs.style.zIndex="30";
+    if(prev!=="pdf"){ pdfRailWasHidden=railHidden; setRailHidden(true); }
+    refreshPdfView();
+  } else fs.style.display="none";
+  if(pg!=="photos") resize();
   if(typeof updatePhotoSelBar==="function") updatePhotoSelBar();
 }
 byId("tabDiagram").onclick=()=>setPage("diagram");
 byId("tabPhotos").onclick=()=>setPage("photos");
+byId("tabPdf").onclick=()=>setPage("pdf");
 
 /* ============================================================ */
 /* PHOTO BLOB STORE                                            */
@@ -4658,7 +4879,7 @@ function serialize(withPhotos){
     ? (P.photos||[]).map(p=>Object.assign({}, p, {dataUrl:photoSrc(p.id)}))
     : (P.photos||[]);
   const payload = {v:3, meta:P.meta, photos, nextId, stampPresets, active:activeOpt,
-    options:OPTIONS.map(o=>({id:o.id,name:o.name,settings:o.settings,objects:o.objects}))};
+    options:OPTIONS.map(o=>({id:o.id,name:o.name,settings:o.settings,objects:o.objects,pres:o.pres}))};
   if(withPhotos && P.meta.titleImage) payload.titleImageData = photoSrc(P.meta.titleImage);
   return JSON.stringify(payload, null, 2);
 }
@@ -4686,7 +4907,7 @@ function applyLoaded(d){
     P.photos=d.photos||[];
     OPTIONS=d.options.map((o,i)=>({ id:o.id||(i+1), name:o.name||("Option "+(i+1)),
       settings:Object.assign(JSON.parse(JSON.stringify(dp.settings)), o.settings||{}),
-      objects:o.objects||[], history:[], hidx:-1 }));
+      objects:o.objects||[], pres:ensurePres(o.pres), history:[], hidx:-1 }));
     optSeq=OPTIONS.reduce((m,o)=>Math.max(m,o.id||0),0)+1;
     activeOpt=Math.min(Math.max(0,d.active||0), OPTIONS.length-1);
   } else {
@@ -4695,14 +4916,14 @@ function applyLoaded(d){
     P.photos=proj.photos||[];
     OPTIONS=[{ id:1, name:"Option 1",
       settings:Object.assign(JSON.parse(JSON.stringify(dp.settings)), proj.settings||{}),
-      objects:proj.objects||[], history:[], hidx:-1 }];
+      objects:proj.objects||[], pres:ensurePres(proj.pres), history:[], hidx:-1 }];
     optSeq=2; activeOpt=0;
   }
   absorbPhotoBlobs(d);
   nextId=(d&&d.nextId) || (OPTIONS.reduce((m,o)=>Math.max(m,(o.objects||[]).reduce((mm,x)=>Math.max(mm,x.id||0),0)),0)+1);
   if(d&&d.stampPresets&&d.stampPresets.length){ stampPresets.length=0; d.stampPresets.forEach(s=>stampPresets.push(s)); activeStamp=stampPresets[0]; }
   const o=OPTIONS[activeOpt];
-  P.settings=o.settings; P.objects=o.objects;
+  P.settings=o.settings; P.objects=o.objects; P.pres=o.pres;
   ensurePrices(); seedHistory(); o.history=history; o.hidx=hidx;
 }
 /* when running inside the native iOS shell, hand saves/prints to Swift;
@@ -4787,6 +5008,18 @@ function loadLocal(){
 }
 
 /* ============================================================ */
+/* PDF NOTES & TERMS — typed per option, printed on the estimate */
+/* ============================================================ */
+/* The prose the PDF prints when the rep hasn't written their own terms. Shared with
+   the Job Info terms box so its placeholder is literally what will print. */
+function presDefaultTerms(s){
+  s=s||P.settings;
+  return "Includes all labor and materials, 100% clean up, haul away. Estimate based on visual "+
+         "inspection; a change order will be submitted for additional work. "+r1(+s.depositPct||0)+
+         "% deposit required; remaining balance due upon completion. Lifetime paint and materials warranty.";
+}
+
+/* ============================================================ */
 /* PRINT  — clean estimate sheet                              */
 /* ============================================================ */
 async function photoSnapshot(ph){
@@ -4819,30 +5052,11 @@ async function photoSnapshot(ph){
     im.src=photoSrc(ph.id);
   });
 }
-// pick which options go into the PDF (skips the dialog when there's only one)
-function chooseExportOptions(){
-  return new Promise(resolve=>{
-    if(OPTIONS.length<=1){ resolve([0]); return; }
-    captureActive();
-    let h=`<div class="note" style="margin-bottom:10px">Choose which option(s) to include in the PDF.</div>`;
-    OPTIONS.forEach((o,i)=>{ h+=`<label class="fld" style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" data-opt="${i}" checked style="width:auto;flex:0 0 auto"><span style="font-weight:700;flex:1">${esc(o.name)}</span><span style="color:var(--text-soft)">${money(optionTotal(o))}</span></label>`; });
-    h+=`<div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="btn-sm" id="expAll">All</button><button class="btn-sm" id="expNone">None</button><button class="btn-sm" id="expCancel">Cancel</button><button class="btn-sm" id="expGo" style="margin-left:auto;background:var(--prime);color:#fff;border-color:var(--prime)">Export PDF</button></div>`;
-    openModal("Export options", h);
-    _modalOnClose=()=>resolve([]);        // ×, backdrop or Escape cancels cleanly
-    const body=byId("modalBody");
-    body.querySelector("#expAll").onclick=()=>body.querySelectorAll("[data-opt]").forEach(c=>c.checked=true);
-    body.querySelector("#expNone").onclick=()=>body.querySelectorAll("[data-opt]").forEach(c=>c.checked=false);
-    body.querySelector("#expCancel").onclick=()=>closeModal();
-    body.querySelector("#expGo").onclick=()=>{ const idxs=[...body.querySelectorAll("[data-opt]:checked")].map(c=>+c.dataset.opt); _modalOnClose=null; closeModal(); resolve(idxs); };
-  });
-}
-
-async function buildPrintDoc(){
-  const chosen = await chooseExportOptions();
-  if(!chosen || !chosen.length) return;
-  if(curPage!=="diagram") setPage("diagram");
+/* The estimate document as one HTML string, for the chosen option indexes. PDF View paginates
+   exactly this (natively in the app), and Share / Print export that same result. */
+async function buildEstimateHTML(chosen){
   captureActive();
-  const savedActive=activeOpt, savedCam={...cam};
+  const savedActive=activeOpt;
   const m=P.meta;
   const showHeads = OPTIONS.length>1;
 
@@ -4855,13 +5069,29 @@ async function buildPrintDoc(){
   const addRole=(brand,name,role)=>{ if(!name)return; const mm=usedByBrand[brand]=usedByBrand[brand]||{}; (mm[name]=mm[name]||[]); if(!mm[name].includes(role)) mm[name].push(role); };
   // Deposit % is a per-option setting, so the prose has to be built per option —
   // a hardcoded "25%" here contradicted the deposit row printed just above it.
-  const disclaimerFor=(s)=>`<p class="muted" style="margin-top:14px">Includes all labor and materials, 100% clean up, haul away. Estimate based on visual inspection; a change order will be submitted for additional work. ${r1(+s.depositPct||0)}% deposit required; remaining balance due upon completion. Lifetime paint and materials warranty.</p>`;
+  // Terms typed in Job Info replace the generated prose; blank falls back to it,
+  // so a job with no custom terms prints exactly what it always did.
+  const disclaimerFor=(s,opt)=>{
+    const custom=((opt&&opt.pres&&opt.pres.terms)||"").trim();
+    // terms-p (pre-wrap) only when the rep typed their own, so an untouched job's PDF
+    // stays byte-for-byte what it was before custom terms existed
+    return custom
+      ? `<p class="muted terms-p" style="margin-top:14px">${esc(custom)}</p>`
+      : `<p class="muted" style="margin-top:14px">${presDefaultTerms(s)}</p>`;
+  };
+  // Per-option notes from Job Info. Read off the option directly: the loop below
+  // swaps P.settings/P.objects per option but not P.pres.
+  const notesFor=(opt)=>{
+    const ns=((opt&&opt.pres&&opt.pres.notes)||[]).filter(n=>(n.text||"").trim());
+    if(!ns.length) return "";
+    return `<div class="notes avoid"><h3 class="sec">Notes</h3>`+
+      ns.map(n=>`<p>${esc(n.text.trim())}</p>`).join("")+`</div>`;
+  };
   let optionSections="";
   for(let k=0;k<chosen.length;k++){
     const opt=OPTIONS[chosen[k]]; if(!opt) continue;
     P.settings=opt.settings; P.objects=opt.objects; ensurePrices();
-    zoomFit(); draw();
-    const diagram = P.objects.length ? canvas.toDataURL("image/png") : "";
+    const diagram = diagramSVG();   // vector, not a canvas PNG — stays sharp through CRM upload + print
     const s=P.settings; const r=compute();
     const gBrand=s.gutterBrand||"Spectra", dBrand=s.downspoutBrand||"Spectra"; brandSet.add(gBrand); brandSet.add(dBrand);
     for(const o of P.objects){ if(o.t==="gutter") addRole(effBrand(o),o.color||s.gutterColor,"Gutter"); else if(o.t==="ds") addRole(effBrand(o),o.color||s.downspoutColor,"Downspout"); }
@@ -4884,13 +5114,12 @@ async function buildPrintDoc(){
       <tr><td>Balance on completion</td><td class="n">${money(r.remaining)}</td></tr>
     </table>
     <p class="muted cardnote">Payment processing: a <b>${r1(+s.cardFee||0)}% fee</b> applies to all credit &amp; debit card payments and a <b>${r1(+s.amexFee||0)}% fee</b> applies to American Express. No fee for cash or check.</p>`;
-    const diagramHTML = diagram ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">${showHeads?esc(opt.name)+" — ":""}Diagram</h3><img class="diagram" src="${diagram}"></div>` : "";
+    const diagramHTML = diagram ? `<div class="diagram-page"><h3 class="sec" style="break-after:avoid;page-break-after:avoid">${showHeads?esc(opt.name)+" — ":""}Diagram</h3>${diagram}</div>` : "";
     const head = showHeads ? `<h2 class="opt-title">${esc(opt.name)} — ${money(r.grand)}</h2>` : "";
-    optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimerFor(s)}</section>${diagramHTML}`;
+    optionSections += `<section class="option-sec${k>0?' optbreak':''}">${head}${colorBlock}${materialHTML}${totalsTable}${disclaimerFor(s,opt)}${notesFor(opt)}</section>${diagramHTML}`;
   }
-  // restore the live (active) option + camera
+  // restore the live (active) option
   P.settings=OPTIONS[savedActive].settings; P.objects=OPTIONS[savedActive].objects; ensurePrices();
-  Object.assign(cam,savedCam); draw();
 
   // aggregated color chart(s) across the chosen options
   const chartBrands=[...new Set([...brandSet, ...Object.keys(usedByBrand)])];
@@ -4922,6 +5151,9 @@ async function buildPrintDoc(){
     .muted{color:#5b6b7a;font-size:12px}
     .warranty{break-inside:avoid;page-break-inside:avoid;margin-top:14px}
     .warranty p{font-size:12px;line-height:1.5;color:#2a3846;margin:6px 0}
+    .notes{break-inside:avoid;page-break-inside:avoid;margin-top:14px}
+    .notes p{font-size:12px;line-height:1.5;color:#2a3846;margin:6px 0;white-space:pre-wrap}
+    .terms-p{white-space:pre-wrap}
     table{border-collapse:collapse;width:100%;font-size:12.5px}
     .info td{padding:3px 6px;border:1px solid #d9e0e7}
     .ws th{background:#1b2530;color:#fff;text-align:left;padding:6px 8px;font-size:11px}
@@ -4935,9 +5167,9 @@ async function buildPrintDoc(){
     .grand td.n{padding:8px 10px}
     .totcirc{display:inline-block;border:2.5px solid #c8202a;border-radius:50%;padding:5px 15px;line-height:1;font-weight:700}
     .cardnote{width:320px;margin:6px 0 0 auto;font-size:11px;line-height:1.45}
-    /* max-height leaves room for the "Diagram" heading so a tall (portrait) snapshot +
+    /* max-height leaves room for the "Diagram" heading so a tall (portrait) diagram +
        heading still fit one printable page — at 9in WKWebView's print path spilled a blank page */
-    .diagram{border:1px solid #d9e0e7;border-radius:6px;max-width:100%;max-height:8.5in;display:block;margin:6px auto 0}
+    .diagram{border:1px solid #d9e0e7;border-radius:6px;width:100%;height:auto;max-width:100%;max-height:8.5in;display:block;margin:6px auto 0}
     .diagram-page{break-before:page;page-break-before:always;break-inside:avoid;page-break-inside:avoid}
     .chart-page{break-before:page;page-break-before:always}
     .photo-head{break-before:page;page-break-before:always}
@@ -4996,14 +5228,80 @@ async function buildPrintDoc(){
     ${infoPageHTML}
     <button class="noprint" onclick="window.print()" style="padding:10px 16px;background:#c8202a;color:#fff;border:0;border-radius:8px;font-weight:700;cursor:pointer">Print this estimate</button>
     </body></html>`;
-  const ph=geNative("gutterPrint");
-  if(ph){ ph.postMessage(html); return; }
+  return html;
+}
+
+/* ============================================================ */
+/* PDF VIEW  — preview the exact PDF, then share / print it     */
+/* ============================================================ */
+/* What the customer is shown is what they're sent. In the app, WebView.swift (gutterPdf)
+   paginates the estimate HTML into a real PDF, shows it in a PDFView laid over #pdfHost, and
+   Share / Print hand off that same PDF data — nothing is re-rendered between preview and
+   export. A plain browser has no PDF engine, so #pdfHost gets the HTML in an iframe and
+   Share / Print fall back to the browser's print dialog. */
+const pdfOptOff=new Set();    // option ids UNticked this session — new options default to included
+let pdfSeq=0;                 // per build; a slow stale build must not replace a newer one
+let pdfLastHTML="";
+
+function pdfNative(msg){ const h=geNative("gutterPdf"); if(h) h.postMessage(msg); return !!h; }
+function pdfHostRect(){ const r=byId("pdfHost").getBoundingClientRect(); return {x:r.left,y:r.top,w:r.width,h:r.height}; }
+function pdfModalOpen(){ return modalWrap.style.display==="flex"; }
+function pdfSyncFrame(){ if(curPage==="pdf") pdfNative({action:"frame",rect:pdfHostRect()}); }
+function setPdfStatus(t,busy){
+  byId("pdfStatus").textContent=t||"";
+  byId("pdfShare").disabled=byId("pdfPrint").disabled=!!busy||!pdfLastHTML;
+}
+function pdfFileName(){
+  const n=String(P.meta.name||"").replace(/[\\/:*?"<>|]+/g,"").trim();
+  return "Estimate"+(n?" - "+n:"")+".pdf";
+}
+function buildPdfOpts(){
+  const box=byId("pdfOpts");
+  if(OPTIONS.length<2){ box.innerHTML=""; return; }
+  box.innerHTML=OPTIONS.map(o=>`<label><input type="checkbox" data-pdfopt="${esc(o.id)}"${pdfOptOff.has(String(o.id))?"":" checked"}>${esc(o.name)}</label>`).join("");
+  box.querySelectorAll("[data-pdfopt]").forEach(cb=>cb.onchange=()=>{
+    if(cb.checked) pdfOptOff.delete(cb.dataset.pdfopt); else pdfOptOff.add(cb.dataset.pdfopt);
+    refreshPdfView();
+  });
+}
+async function refreshPdfView(){
+  if(curPage!=="pdf") return;
+  buildPdfOpts();
+  const seq=++pdfSeq;
+  const chosen=OPTIONS.map((o,i)=>i).filter(i=>!pdfOptOff.has(String(OPTIONS[i].id)));
+  const host=byId("pdfHost");
+  if(!chosen.length){
+    pdfLastHTML=""; pdfNative({action:"hide"});
+    host.querySelectorAll("iframe").forEach(f=>f.remove());
+    byId("pdfEmpty").style.display=""; setPdfStatus("");
+    return;
+  }
+  byId("pdfEmpty").style.display="none";
+  setPdfStatus("Building PDF…",true);
+  const html=await buildEstimateHTML(chosen);
+  if(seq!==pdfSeq || curPage!=="pdf") return;
+  pdfLastHTML=html;
+  // native answers with pdfNativeDone / pdfNativeError; buttons stay disabled until the PDF exists
+  if(pdfNative({action:"build", seq, html, name:pdfFileName(), rect:pdfHostRect(), hidden:pdfModalOpen()})) return;
+  let fr=host.querySelector("iframe");
+  if(!fr){ fr=document.createElement("iframe"); fr.title="Estimate preview"; host.appendChild(fr); }
+  fr.srcdoc=html;
+  setPdfStatus("Browser preview — page breaks show when printed");
+}
+window.pdfNativeDone=(seq,pages)=>{ if(seq===pdfSeq) setPdfStatus(pages+" page"+(pages===1?"":"s")); };
+window.pdfNativeError=(seq,msg)=>{ if(seq===pdfSeq){ pdfLastHTML=""; setPdfStatus("PDF failed: "+msg); } };
+function pdfExport(action){
+  if(!pdfLastHTML) return;
+  if(pdfNative({action})) return;
   const win=window.open("","_blank");
-  if(!win){ alert("Please allow pop-ups to export the estimate, or use the in-app Print button."); return; }
-  win.document.write(html); win.document.close();
+  if(!win){ alert("Please allow pop-ups to export the estimate."); return; }
+  win.document.write(pdfLastHTML); win.document.close();
   setTimeout(()=>{ try{win.focus();win.print();}catch(e){} },350);
 }
-byId("btnPrint").onclick=buildPrintDoc;
+byId("pdfRefresh").onclick=()=>refreshPdfView();
+byId("pdfShare").onclick=()=>pdfExport("share");
+byId("pdfPrint").onclick=()=>pdfExport("print");
+byId("btnPrint").onclick=()=>setPage("pdf");
 
 /* ============================================================ */
 /* KEYBOARD                                                    */
@@ -5024,6 +5322,8 @@ window.addEventListener("keydown",e=>{
     if(e.key==="Escape"){ e.preventDefault(); cancelPhotoLine(); clearPhotoSel(); return; }
     return;
   }
+  // PDF View is read-only: don't let tool hotkeys act on the hidden diagram
+  if(curPage==="pdf") return;
   if((e.ctrlKey||e.metaKey)){
     if(e.key.toLowerCase()==="z"){ e.preventDefault(); if(e.shiftKey)redo(); else undo(); return; }
     if(e.key.toLowerCase()==="y"){ e.preventDefault(); redo(); return; }
@@ -5047,7 +5347,7 @@ window.addEventListener("keyup",e=>{
 let _autosaveT=0;
 function scheduleSave(){ clearTimeout(_autosaveT); _autosaveT=setTimeout(saveLocal,1200); }
 const _origRefreshAll=refreshAll;
-refreshAll=function(){ _origRefreshAll(); scheduleSave(); };
+refreshAll=function(){ _origRefreshAll(); scheduleSave(); if(curPage==="pdf") refreshPdfView(); };
 
 /* ============================================================ */
 /* INIT                                                        */

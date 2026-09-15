@@ -101,8 +101,16 @@ snapshots ~27 MB and blew WKWebView's localStorage quota silently. Exported "Sav
 embed images so backups stay portable (`serialize(true)`).
 
 **Native bridge.** `geNative(name)` returns a `webkit.messageHandlers` handler or `null`, so the
-same code runs in a plain browser and in the app. `gutterSave` → iOS share sheet, `gutterPrint`
-→ AirPrint. Handlers are registered in `WebView.swift`; both sides must change together.
+same code runs in a plain browser and in the app. `gutterSave` → iOS share sheet; `gutterPdf`
+(`build`/`frame`/`hide`/`show`/`share`/`print`) → native pagination into a real PDF shown in a
+`PDFView` laid over the PDF View tab's `#pdfHost`, with Share/Print sending that same PDF data. The
+overlay sits above ALL web content, so anything modal on that tab must `hide` it first. Handlers
+are registered in `WebView.swift`; both sides must change together.
+
+**The PDF diagram is vector.** `diagramSVG()` replays `drawScene()` into `makeSvgCtx()`, a recorder
+that turns the 2D-context calls RENDERING uses into SVG. Put job content in `drawScene()` (it prints)
+and editor chrome in `draw()` (it doesn't); a new `ctx` method in RENDERING must also be added to
+the recorder or it silently won't print.
 
 ## Conventions
 
