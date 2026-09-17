@@ -622,7 +622,12 @@ function defaultProject(){
       footagePerEndcap:1,         // ft added to total per end cap
       roundDownspoutTo10:true,    // round downspout pipe up to nearest 10 ft (10ft sections)
       resizeOnEdit:true,          // typing a segment footage resizes that line to scale
-      labelSize:1,                // measurement/downspout label size multiplier (scales with zoom)
+      labelSize:1.2,              // measurement/downspout label size multiplier (scales with zoom);
+                                  // 1.2 is the baseline reps asked for — a missing key on an older
+                                  // save falls back to this same 1.2 (see chipPx/pdfLabelPx)
+      showDsSize:false,           // draw the "3×4" size tag on each downspout. Off by default, and a
+                                  // missing key on an older save therefore reads as off, which is what
+                                  // the reps asked for — the tag crowds a dense diagram.
       endCapsPerRun:2,
       bayDeviation:15,            // degrees from 90 to call a bay miter
       straightMax:165,            // >this interior angle = treated as straight (no corner)
@@ -940,14 +945,25 @@ function roundStrokeFeet(raw, mode){
   raw=+raw||0; if(raw<=0) return 0;
   return mode==="screen" ? Math.ceil(raw/4 - 1e-9)*4 : Math.ceil(raw - 1e-9);
 }
-// behavior mode of a custom product: "line" (polyline, default) | "demo" | "screen"
+// behavior mode of a custom product: "line" (polyline, default) | "demo" | "screen" | "item"
 function productMode(prod){ return (prod && prod.mode) || "line"; }
+// Which modes paint as a freehand highlight. "item" is NOT one — it taps a marker down — so every
+// stroke test asks this rather than productMode()!=="line", which would smear an item tool.
+function strokeMode(prod){ const m=productMode(prod); return (m==="demo"||m==="screen")?m:null; }
+/* Symbol drawn on an item's chip: the rep's own tag, else initials ("Flex hose" -> FH); a one-word
+   name keeps its first 3 letters so a single initial never stands alone on the diagram. */
+function productTag(prod){
+  const t=((prod&&prod.tag)||"").trim().toUpperCase().slice(0,4);
+  if(t) return t;
+  const w=String((prod&&prod.name)||"").split(/[^A-Za-z0-9]+/).filter(Boolean);
+  return (w.length>1 ? w.map(x=>x[0]).join("").slice(0,4) : (w[0]||"IT").slice(0,3)).toUpperCase();
+}
 // Product ids come from uid() (a number) but reach us as strings from data-* attributes,
 // so every lookup compares loosely — a strict === here silently broke Edit and Delete.
 function sameProductId(a,b){ return a!=null && b!=null && String(a)===String(b); }
 function productOf(id){ return (P.settings.customProducts||[]).find(p=>sameProductId(p.id,id)) || null; }
 // is the active custom product a freehand-stroke product?
-function customStrokeMode(){ const p=productOf(activeCustom); const m=productMode(p); return m==="line"?null:m; }
+function customStrokeMode(){ return strokeMode(productOf(activeCustom)); }
 
 // ---- eraser for the Demo / Screen highlight tools ----
 function eraseModeActive(){ return (tool==="demo"&&demoErase)||(tool==="screen"&&screenErase); }
@@ -1164,13 +1180,13 @@ function freeEnds(o){
   };
   return [free(a,0), free(b,1)];
 }
-/* nearest open gutter endpoint to a world point, within a grab threshold */
+/* nearest open run endpoint to a world point, within a grab threshold */
 function endSnapThreshold(){ return Math.max(GRID*0.55, 14/cam.scale); }
-function findGutterEndNear(w){
+function findRunEndNear(w,pred){
   const thr=endSnapThreshold();
   let best=null, bd=thr;
   for(const o of P.objects){
-    if(o.t!=="gutter"||!o.pts||o.pts.length<1) continue;
+    if(!o.pts||o.pts.length<1||!pred(o)) continue;
     const ends=[{pt:o.pts[0],end:0},{pt:o.pts[o.pts.length-1],end:1}];
     for(const e of ends){
       const d=dist(w,e.pt);
@@ -1179,6 +1195,10 @@ function findGutterEndNear(w){
   }
   return best;
 }
+function findGutterEndNear(w){ return findRunEndNear(w, o=>o.t==="gutter"); }
+/* End of another line-mode run of the SAME product. Snapping to one is what welds a wrap drawn as
+   several runs into the single group customTagOwners() gives one product label. */
+function findCustomEndNear(w,pid){ return findRunEndNear(w, o=>o.t==="custom"&&!o.stroke&&sameProductId(o.productId,pid)); }
 
 /* Snap target while drawing: an existing run's end, or — since the run in progress isn't in
    P.objects yet — its own start point, so a shape can be closed back onto itself. */
@@ -1267,6 +1287,41 @@ function junctionCorners(){
   return out;
 }
 
+/* One product label per CONNECTED GROUP of custom lines — a fascia wrap drawn as four runs around a
+   house otherwise reads as four separate products on the printed diagram. Union-find over the
+   line-mode (non-stroke) runs of each product: an endpoint of one within CAP_EPS of ANY vertex of
+   another joins them. The looser rule is safe here because custom lines bill no miters or end caps,
+   so nothing depends on the join being end-to-end; the stricter gutter rule would leave a run that
+   T's into the middle of another with a duplicate label. Derived on every draw and never cached —
+   dragging, splitting or extending a run re-forms the groups, and a stored owner would go stale.
+   Returns Map<objId, anchor vertex> holding only the one run per group that draws the tag. */
+function customTagOwners(){
+  const runs=P.objects.filter(o=>o.t==="custom"&&!o.stroke&&o.pts&&o.pts.length>=2&&!strokeMode(productOf(o.productId)));
+  const par=runs.map((_,i)=>i);
+  const find=i=>{ while(par[i]!==i){ par[i]=par[par[i]]; i=par[i]; } return i; };
+  const touches=(A,B)=>{
+    for(const p of [A[0],A[A.length-1]]) for(const q of B) if(dist(p,q)<CAP_EPS) return true;
+    return false;
+  };
+  for(let i=0;i<runs.length;i++) for(let j=i+1;j<runs.length;j++){
+    if(!sameProductId(runs[i].productId,runs[j].productId)) continue;
+    if(!touches(runs[i].pts,runs[j].pts)&&!touches(runs[j].pts,runs[i].pts)) continue;
+    const a=find(i), b=find(j); if(a!==b) par[b]=a;
+  }
+  // top-most vertex of the group owns the label (tie -> left-most), so it lands above the drawing
+  const best={};
+  runs.forEach((o,i)=>{
+    const r=find(i);
+    for(const p of o.pts){
+      const b=best[r];
+      if(!b || p.y<b.pt.y || (p.y===b.pt.y && p.x<b.pt.x)) best[r]={i,pt:p};
+    }
+  });
+  const out=new Map();
+  Object.values(best).forEach(b=>out.set(runs[b.i].id, b.pt));
+  return out;
+}
+
 /* ============================================================ */
 /* TAKEOFF / COMPUTE                                            */
 /* ============================================================ */
@@ -1280,7 +1335,10 @@ function compute(){
   GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; if(g.miterKey) q[g.miterKey]=0; });
   DS_STYLES.forEach(d=>{ q[d.priceKey]=0; q[d.outletKey]=0; q[d.elbowKey]=0; q[d.offsetKey]=0; });
   let corners=0;
+  // one aggregate per custom product; `mode` decides whether it bills by the foot or each
   const customAgg={};
+  const newCustomAgg=(pid,prod,o,mode)=>({id:pid,name:prod?prod.name:"Custom",rate:prod?(+prod.pricePerFoot||0):0,
+    color:(prod?prod.color:o.color)||"#7a4fd6",mode,rawFeet:0,count:0});
   const dsRaw={};   // downspout pipe footage by size|color, before 10ft rounding
   let demoRaw=0;                       // raw demo highlight footage (rounded up to whole ft after loop)
   const screenRaw={};                  // raw gutter-screen footage by type (rounded up to mult of 4)
@@ -1316,11 +1374,18 @@ function compute(){
       if(o.material==="concrete") q.splashConcrete++; else q.splashPlastic++;
     } else if(o.t==="custom"){
       const prod=productOf(o.productId);
-      const mode=productMode(prod);
+      // a product switched to Item mode leaves its already-drawn runs behind: bill them by the
+      // foot rather than silently dropping their footage out of the estimate
+      const mode=strokeMode(prod)||"line";
       const pid=o.productId||"_";
       const raw = (o.stroke||mode!=="line") ? pathFeetRaw(o.pts) : (o.lengths||[]).reduce((a,b)=>a+(+b||0),0);
-      if(!customAgg[pid]) customAgg[pid]={id:pid,name:prod?prod.name:"Custom",rate:prod?(+prod.pricePerFoot||0):0,color:(prod?prod.color:o.color)||"#7a4fd6",mode,rawFeet:0};
+      customAgg[pid]=customAgg[pid]||newCustomAgg(pid,prod,o,mode);
       customAgg[pid].rawFeet+=raw;
+    } else if(o.t==="item"){
+      const prod=productOf(o.productId);
+      const pid=o.productId||"_";
+      customAgg[pid]=customAgg[pid]||newCustomAgg(pid,prod,o,"item");
+      customAgg[pid].count++;                      // items are counted, not measured
     } else if(o.t==="demo"){
       demoRaw += pathFeetRaw(o.pts);
     } else if(o.t==="screen"){
@@ -1336,13 +1401,16 @@ function compute(){
     else if(c.bay) q.bay++;
     else if(s.regularMiter==="strip") q.strip++; else q.box++;
   }
-  // custom product rows + total cost (stroke-mode products round their aggregate footage)
+  // custom product rows + total cost (stroke-mode products round their aggregate footage).
+  // Every row carries qty+unit so materialList() and the worksheet can print "ea" or "ft" without
+  // re-deciding the mode; `feet` stays for the footage rows the flat-price totals still read.
   const customRows=Object.values(customAgg).map(c=>{
+    if(c.mode==="item") return {id:c.id,name:c.name,rate:c.rate,color:c.color,mode:c.mode,feet:0,qty:c.count,unit:"ea",amount:c.count*c.rate};
     const feet = c.mode==="line" ? c.rawFeet : roundStrokeFeet(c.rawFeet, c.mode);
-    return {id:c.id,name:c.name,rate:c.rate,color:c.color,mode:c.mode,feet,amount:feet*c.rate};
+    return {id:c.id,name:c.name,rate:c.rate,color:c.color,mode:c.mode,feet,qty:feet,unit:"ft",amount:feet*c.rate};
   });
   const customTotal=customRows.reduce((a,c)=>a+c.amount,0);
-  const customFootage=customRows.reduce((a,c)=>a+c.feet,0);
+  const customFootage=customRows.reduce((a,c)=>a+(c.unit==="ft"?c.feet:0),0);
 
   // demo + gutter-screen rows (always priced, in both flat and itemized modes)
   const demoFeet=roundStrokeFeet(demoRaw,"demo");
@@ -1503,7 +1571,7 @@ function materialList(){
   if(splashC) out.push({item:"Splash block — concrete",qty:splashC,unit:"ea",color:""});
   if(+s.leafGuard6) out.push({item:'Leaf guard 6"',qty:+s.leafGuard6,unit:"ft",color:s.gutterColor,brand:gb});
   if(+s.leafGuard5) out.push({item:'Leaf guard 5"',qty:+s.leafGuard5,unit:"ft",color:s.gutterColor,brand:gb});
-  (r.customRows||[]).forEach(c=>out.push({item:c.name+" (custom)",qty:r1(c.feet),unit:"ft",color:c.color}));
+  (r.customRows||[]).forEach(c=>out.push({item:c.name+" (custom)",qty:r1(c.qty),unit:c.unit,color:c.color}));
   if(r.demoFeet>0) out.push({item:"Demo gutter",qty:r.demoFeet,unit:"ft",color:""});
   (r.screenRows||[]).forEach(sc=>out.push({item:"Gutter screen — "+sc.name,qty:sc.feet,unit:"ft",color:""}));
   return out;
@@ -1538,6 +1606,8 @@ function segSegHit(a,b,c,d){
   return ((d1>0&&d2<0)||(d1<0&&d2>0))&&((d3>0&&d4<0)||(d3<0&&d4>0));
 }
 let hover=null;
+// objId -> world anchor of the one product label its group of custom lines gets; rebuilt by drawScene
+let customTagOwner=new Map();
 
 function roundRect(c,x,y,w,h,r){
   r=Math.min(r,w/2,h/2);
@@ -1553,8 +1623,9 @@ function objById(id){ return P.objects.find(o=>o.id===id); }
    the individual objects; diagramSVG() empties sel/segSel so it never prints.) */
 function drawScene(){
   // ordered draw: highlights first (under), then gutters, arrows, ds, valley, stamps, text on top
-  const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,splash:4,stamp:5,text:6};
+  const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,splash:4,item:4,stamp:5,text:6};
   const objs=[...P.objects].sort((a,b)=>(order[a.t]||9)-(order[b.t]||9));
+  customTagOwner=customTagOwners();   // re-derived here, so the PDF replay groups exactly as the canvas does
   for(const o of objs) drawObject(o);
 
   // miters where separate runs meet: painted once here, since they belong to no single object.
@@ -1593,9 +1664,11 @@ draw = function(){
     ctx.beginPath();ctx.arc(c.x,c.y,rr,0,7);ctx.stroke();ctx.restore();
   }
 
-  // highlight a snappable gutter end the cursor is near (shows a corner will form)
-  if(tool==="gutter" && cursorW && !calib){
-    const hit=snapEndNear(cursorW);
+  // highlight a snappable run end the cursor is near (gutter: a corner will form; custom line:
+  // the two runs join into one labelled group)
+  const customLineTool = tool==="custom" && !customStrokeMode() && productMode(productOf(activeCustom))!=="item";
+  if((tool==="gutter"||customLineTool) && cursorW && !calib){
+    const hit = tool==="gutter" ? snapEndNear(cursorW) : findCustomEndNear(cursorW,activeCustom);
     if(hit){
       const sp=worldToScreen(hit.pt);
       ctx.save();
@@ -1636,7 +1709,7 @@ function getCSS(v){ return getComputedStyle(document.documentElement).getPropert
 /* measurement/downspout label font size, world-anchored so it scales with zoom
    (keeps the PDF fit-to-view from cluttering) and tunable via settings.labelSize */
 function chipPx(base){
-  const s = base*(P.settings.labelSize||1)*cam.scale;
+  const s = base*(P.settings.labelSize||1.2)*cam.scale;
   return Math.max(2, Math.min(80, s));
 }
 
@@ -1693,6 +1766,7 @@ function chip(text,sx,sy,opt){
 function labelOffsetOf(o,key){
   if(key==="note") return o.noteOff||null;
   if(key==="size") return o.sizeOff||null;
+  if(key==="tag") return o.tagOff||null;
   return (o.segLabelOff && o.segLabelOff[key]) || null;
 }
 function segChip(o,key,mx,my,text,opt){
@@ -1712,6 +1786,7 @@ function drawObject(o){
   if(o.t==="ds")     return drawDS(o);
   if(o.t==="valley") return drawValley(o);
   if(o.t==="splash") return drawSplash(o);
+  if(o.t==="item")   return drawItem(o);
   if(o.t==="text")   return drawText(o);
   if(o.t==="arrow")  return drawArrow(o);
   if(o.t==="stamp")  return drawStamp(o);
@@ -1795,8 +1870,8 @@ function drawCapMark(end,prev,on){
 function drawCustom(o){
   if(o.pts.length<1) return;
   const prodS=productOf(o.productId);
-  if(o.stroke || productMode(prodS)!=="line"){    // freehand stroke-mode custom product
-    paintStroke(o,(prodS&&prodS.color)||"#7a4fd6",productMode(prodS),prodS?prodS.name:"");
+  if(o.stroke || strokeMode(prodS)){    // freehand stroke-mode custom product
+    paintStroke(o,(prodS&&prodS.color)||"#7a4fd6",strokeMode(prodS),prodS?prodS.name:"");
     return;
   }
   const pts=o.pts.map(worldToScreen);
@@ -1809,11 +1884,14 @@ function drawCustom(o){
   ctx.strokeStyle=col;ctx.lineWidth=4.5;ctx.setLineDash([9,5]);line(pts);ctx.setLineDash([]);
   if(isSel){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=1.5;ctx.setLineDash([5,4]);line(pts);ctx.setLineDash([]); }
   ctx.restore();
-  // product tag at the first vertex
-  if(prod){
-    const p0=pts[0];
+  // product tag — once per connected group, above its top-most vertex, not once per run.
+  // Draggable like a seglen/dsnote chip: offset stored on the owning run as o.tagOff.
+  const anchor=prod?customTagOwner.get(o.id):null;
+  if(anchor){
+    const ap=worldToScreen(anchor);
     const _pn=chipPx(10);
-    chip(prod.name, p0.x, p0.y-14*cam.scale, {size:_pn,pad:Math.max(2,_pn*0.42),bold:true,bg:col,fg:"#fff",bc:col});
+    const box=segChip(o,"tag",ap.x,ap.y-14*cam.scale,prod.name,{size:_pn,pad:Math.max(2,_pn*0.42),bold:true,bg:col,fg:"#fff",bc:col});
+    addLabelBox("customtag",o.id,box.x,box.y,box.w,box.h);
   }
   // segment length chips
   for(let i=0;i<o.pts.length-1;i++){
@@ -1850,10 +1928,14 @@ function drawDS(o){
   addLabelBox("obj",o.id,s.x-9*k,s.y-9*k,18*k,18*k);
   // size tag — draggable like the notation chip, so it can be moved off a crowded
   // corner of the diagram. Registered last so it wins the hit test over the marker.
-  const _stz=chipPx(9);
-  const sbox=segChip(o,"size",s.x,s.y-20*k,sz,{size:_stz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_stz*0.42),r:4});
-  const grab=lastPtrType==="touch"?5:2;   // a little slack; the tag is small
-  addLabelBox("dssize",o.id,sbox.x-grab,sbox.y-grab,sbox.w+grab*2,sbox.h+grab*2);
+  // Off unless the job asks for it: with a spout every few feet the tags crowd the drawing,
+  // and skipping the label box too keeps the drag/double-tap paths from grabbing a ghost.
+  if(P.settings.showDsSize){
+    const _stz=chipPx(9);
+    const sbox=segChip(o,"size",s.x,s.y-20*k,sz,{size:_stz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_stz*0.42),r:4});
+    const grab=lastPtrType==="touch"?5:2;   // a little slack; the tag is small
+    addLabelBox("dssize",o.id,sbox.x-grab,sbox.y-grab,sbox.w+grab*2,sbox.h+grab*2);
+  }
 }
 
 function drawValley(o){
@@ -1874,6 +1956,23 @@ function drawSplash(o){
   // material tag below
   const _tz=chipPx(8);
   chip(concrete?"CONCRETE":"PLASTIC",s.x,s.y+16*k,{size:_tz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_tz*0.42),r:4});
+  if(sel.has(o.id)){ ctx.save();ctx.strokeStyle="#2b7fd0";ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.strokeRect(box.x-3,box.y-3,box.w+6,box.h+6);ctx.restore(); }
+  addLabelBox("obj",o.id,box.x,box.y,box.w,box.h);
+}
+
+/* a tap-placed custom product, priced each. Drawn like a splash block — only chip()/roundRect,
+   so the SVG recorder prints it — with the product's symbol on the marker and its name below. */
+function drawItem(o){
+  const s=worldToScreen(o);
+  const k=markerK();
+  const prod=productOf(o.productId);
+  const col=(prod&&prod.color)||"#7a4fd6";
+  const _sz=chipPx(12);
+  const box=chip(productTag(prod),s.x,s.y,{size:_sz,pad:Math.max(2,_sz*0.42),bold:true,bg:col,fg:"#fff",bc:col,bw:1.5,r:5});
+  if(prod){
+    const _tz=chipPx(8);
+    chip(prod.name,s.x,s.y+16*k,{size:_tz,bold:true,bg:"#243240",fg:"#fff",bc:"#243240",pad:Math.max(2,_tz*0.42),r:4});
+  }
   if(sel.has(o.id)){ ctx.save();ctx.strokeStyle="#2b7fd0";ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.strokeRect(box.x-3,box.y-3,box.w+6,box.h+6);ctx.restore(); }
   addLabelBox("obj",o.id,box.x,box.y,box.w,box.h);
 }
@@ -2246,7 +2345,7 @@ function objBounds(o){
   // o.h is only filled in by drawText — a job fitted before its first draw (PDF View right after
   // Open) had h undefined, turning the whole print fit into NaN and dropping the diagram
   if(o.t==="text"){ return {x:o.x,y:o.y,w:o.w,h:o.h||textHeight(o)}; }
-  if(o.t==="ds"||o.t==="valley"||o.t==="splash"||o.t==="stamp"){ return {x:o.x-30,y:o.y-20,w:60,h:50}; }
+  if(o.t==="ds"||o.t==="valley"||o.t==="splash"||o.t==="item"||o.t==="stamp"){ return {x:o.x-30,y:o.y-20,w:60,h:50}; }
   return {x:o.x||0,y:o.y||0,w:20,h:20};
 }
 
@@ -2359,6 +2458,11 @@ function setTool(id){
   draw();
 }
 function toolHint(t){
+  // the custom tool is one dock button per product, so its hint depends on that product's mode
+  if(t==="custom"){
+    const p=productOf(activeCustom);
+    if(productMode(p)==="item") return "Tap to drop a "+((p&&p.name)||"item")+" — priced each • move or delete it via Select";
+  }
   return ({
     // Kept short on purpose — this one is always on screen. The box-selection nuance (whole run
     // vs. just the crossed segments) and label snap-back are explained contextually instead, by
@@ -2395,20 +2499,42 @@ let frameDrag=null;   // {i, corner:-1 (move) | 0..3 TL,TR,BR,BL, start:world pt
 // Measured (Chrome) heights in CSS px of a PDF diagram page's parts. buildEstimateHTML sizes the diagram
 // box from these and the editor shapes frames from the same numbers, so a frame prints as drawn.
 // Re-measure if the .brand/.cust/.optstrip/.price CSS in buildEstimateHTML changes.
-const PDFL={head:46, mini:24, gap:9, strip:25, custBase:13, custRow:29, rowH:23, priceBase:70, summary:59, note:16};
+const PDFL={head:46, mini:24, gap:9, strip:25, custBase:13, custRow:29, custWrap:15, custBig:32, custWrapBig:18,
+            rowH:23, priceBase:70, summary:74, note:16, foot:36};
+/* One .cust column in CSS px: PDF_PAGE.w less the body padding, the card's padding and border, and
+   the two 18px gaps, split three ways. The grid in buildEstimateHTML must stay 1fr 1fr 1fr or this
+   lies — and it lying is what once let page 1's footer fall onto page 2. */
+const CUST_COL=(PDF_PAGE.w-52-24-2-36)/3;
+/* Height of one customer cell (label + value + its 4px margin), wraps included. Arial averages
+   ~.53em (~.58em bold) and overflow-wrap:anywhere breaks mid-word, so width/column estimates the
+   wrap closely enough — and it errs wide, which is the safe side: iOS's print pass sets text wider
+   than Chrome and wraps values Chrome fits on one line. */
+function custCellH(v,big){
+  const t=String(v||"").trim(); if(!t) return 0;
+  const n=Math.max(1, Math.ceil(t.length*(big?13.5*0.58:11.5*0.53)/CUST_COL));
+  return (big?PDFL.custBig:PDFL.custRow) + (n-1)*(big?PDFL.custWrapBig:PDFL.custWrap);
+}
 /* Diagram box (CSS px) on an option's page 1 (page=0) or a later page (page>0, all alike). Its height is set outright
    rather than flexed into the leftover space: iOS WebKit's print pass didn't shrink a flex:1 box when
    its taller text overran a fixed-height page, and the Turnkey Total was cut onto page 2. */
 function pdfBoxFor(page,{meta,settings,r,nPages,first,multi}){
   const strip=(multi||nPages>1)?PDFL.gap+PDFL.strip:0;
   if(page>0) return {w:PDF_PAGE.w, h:PDF_BUDGET_H-PDFL.mini-(PDFL.gap+PDFL.strip)-PDFL.gap};
-  const has=v=>String(v||"").trim()?1:0;
-  const rows=Math.max(has(meta.name)+has(meta.address), has(fmtPhone(meta.phone))+has(fmtPhone(meta.cell))+has(meta.email),
-    has(meta.gateCode)+(has(meta.salesperson)||has(fmtPhone(meta.salespersonPhone))));
-  const head=first ? PDFL.head+(rows?PDFL.gap+PDFL.custBase+rows*PDFL.custRow:0) : PDFL.mini;
+  // The customer card, row by row: each grid row is as tall as its tallest cell, and a row whose
+  // three cells are all blank isn't emitted at all — same rule buildEstimateHTML applies.
+  const rep=[meta.salesperson,fmtPhone(meta.salespersonPhone)].map(v=>String(v||"").trim()).filter(Boolean).join("  ·  ");
+  const cust=Math.max(custCellH(meta.name,1), custCellH(meta.address),
+                      custCellH(fmtPhone(meta.phone))+custCellH(fmtPhone(meta.cell)))   // phone + cell share a slot
+           + Math.max(custCellH(meta.email), custCellH(meta.gateCode), custCellH(rep));
+  const head=first ? PDFL.head+(cust?PDFL.gap+PDFL.custBase+cust:0) : PDFL.mini;
   const n=pdfPriceRows(settings,r).length;
   const price=PDFL.gap+Math.max(PDFL.summary, PDFL.rowH*(n-1)+PDFL.priceBase);
-  return {w:PDF_PAGE.w, h:Math.max(160, Math.floor(PDF_BUDGET_H-head-strip-PDFL.gap-price-PDFL.note))};
+  // The company footer prints on the first option's page 1 only, so charge its height to that page
+  // alone. PDFL.foot is a few px over its measured 29 on purpose: it is the LAST thing on the page,
+  // so it absorbs every accumulated rounding error, and at 30 the worst-case job cleared the
+  // printable edge by only 7pt in the simulator's renderPDF.
+  const foot=first ? PDFL.foot : 0;
+  return {w:PDF_PAGE.w, h:Math.max(160, Math.floor(PDF_BUDGET_H-head-strip-PDFL.gap-price-PDFL.note-foot))};
 }
 // the same box for the ACTIVE option, for the editor's frames
 function pdfDiagramBox(page,nPages){
@@ -2468,7 +2594,7 @@ function diagramCrowded(){
   const box=pdfDiagramBox(0,0);
   const sc=Math.max(.15,Math.min(3,Math.min((PRINT_VIEW.w-120)/Math.max(1,b.w),(PRINT_VIEW.h-120)/Math.max(1,b.h))));
   const fit=Math.min(box.w/(b.w*sc+40), box.h/(b.h*sc+40));
-  return 12*(P.settings.labelSize||1)*sc*fit < 7;
+  return 12*(P.settings.labelSize||1.2)*sc*fit < 7;
 }
 function frameCorners(f){ return [{x:f.x,y:f.y},{x:f.x+f.w,y:f.y},{x:f.x+f.w,y:f.y+f.h},{x:f.x,y:f.y+f.h}]; }
 // label chip above a frame, in screen px; a real page's chip ends in a × that removes that page
@@ -2599,7 +2725,8 @@ function buildOptbar(){
       + g('<label>Brand</label><select id="opDsBrand">'+BRANDS.map(b=>'<option value="'+b+'"'+(b===downspoutBrand()?' selected':'')+'>'+b+'</option>').join("")+'</select>')
       + g('<label>Color</label><span class="swatch" id="opDsSw" style="background:'+colorHex(dsDrawColor||P.settings.downspoutColor,downspoutBrand())+'"></span><select id="opDsColor">'+colorOptions(dsDrawColor||P.settings.downspoutColor,downspoutBrand())+'</select>')
       + '<span class="mini" style="color:var(--text-soft)">Each spout can be recolored later via Select</span>'
-      + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap</label>');
+      + dv + g('<label><input type="checkbox" id="opDsShowSize" '+(P.settings.showDsSize?"checked":"")+'> Show size tags</label>')
+      + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap</label>');
   } else if(tool==="splash"){
     ensurePrices();
     const pr=P.settings.prices, mat=splashDrawMaterial;
@@ -2611,10 +2738,14 @@ function buildOptbar(){
   } else if(tool==="custom"){
     const p=productOf(activeCustom)||{name:"Custom",pricePerFoot:0,color:"#c8202a"};
     const sm=customStrokeMode();
+    const im=productMode(p)==="item";   // priced each, so no auto-measure / ft-per-square here
     h+='<span class="ob-title">'+esc((p.name||"CUSTOM").toUpperCase())+'</span>'+dv
-      + g('<label>'+money(p.pricePerFoot||0)+' / ft</label><button class="chip" id="opCustEdit">Edit product…</button>')
+      + g('<label>'+money(p.pricePerFoot||0)+(im?' each':' / ft')+'</label><button class="chip" id="opCustEdit">Edit product…</button>')
       + g('<label>Color</label><span class="swatch" id="opCustSw" style="background:'+(p.color||'#c8202a')+'"></span><button class="chip" id="opCustCol">Color…</button>');
-    if(sm){
+    if(im){
+      h+= dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap</label>')
+        + '<span class="mini" style="color:var(--text-soft)">Tap to drop one — each placement counts as one on the estimate</span>';
+    } else if(sm){
       h+= dv + '<span class="mini" style="color:var(--text-soft)">'+(sm==="screen"?'Screen mode — drag over runs · rounds up to next 4 ft':'Demo mode — drag over runs · rounds up to whole ft')+'</span>';
     } else {
       h+= dv + g('<label><input type="checkbox" id="opAuto" '+(P.settings.autoMeasure?"checked":"")+'> Auto-measure</label>')
@@ -2666,9 +2797,10 @@ function buildOptbar(){
       h+= g('<label>Brand</label><select id="opSelDsBrand"><option value="">Match job ('+downspoutBrand()+')</option>'+BRANDS.map(b=>'<option value="'+b+'"'+(one.brand===b?' selected':'')+'>'+b+'</option>').join("")+'</select>')
         + g('<label>Spout color</label><span class="swatch" id="opSelSw" style="background:'+colorHex(cur,oBrand)+'"></span><select id="opSelDsColor">'+dsColorOpts+'</select>')
         + g('<label>Size</label><select id="opSelDsSize"'+(szs.length<2?' disabled':'')+'>'+szs.map(s=>'<option value="'+s+'"'+(curSz===s?' selected':'')+'>'+dsStyle(s).short+'</option>').join("")+'</select>')
-        + '<span class="mini" style="color:var(--text-soft)">Override for brick vs. stucco, etc.</span>';
+        + '<span class="mini" style="color:var(--text-soft)">Override for brick vs. stucco, etc.</span>'
+        + g('<label><input type="checkbox" id="opDsShowSize" '+(P.settings.showDsSize?"checked":"")+'> Show size tags</label>');
       // an explicit button beats relying on a double-tap landing on a small chip
-      if(one.sizeOff||one.noteOff) h+= g('<button class="chip" id="opSelDsResetLbl">↺ Reset label positions</button>');
+      if(P.settings.showDsSize && (one.sizeOff||one.noteOff)) h+= g('<button class="chip" id="opSelDsResetLbl">↺ Reset label positions</button>');
       h+= dv;
     } else if(one && one.t==="gutter"){
       const fe=freeEnds(one); const cm=one.caps||[true,true];
@@ -2749,6 +2881,7 @@ function wireOptbar(){
     buildOptbar(); refreshAll();
   };
   if(byId("opDsColor")) byId("opDsColor").onchange=e=>{ dsDrawColor=e.target.value; byId("opDsSw").style.background=colorHex(e.target.value,downspoutBrand()); };
+  if(byId("opDsShowSize")) byId("opDsShowSize").onchange=e=>{ P.settings.showDsSize=e.target.checked; buildOptbar(); refreshAll(); };
   if(byId("opSplashMat")) byId("opSplashMat").onchange=e=>{ splashDrawMaterial=e.target.value; };
   if(byId("opSelSplashMat")) byId("opSelSplashMat").onchange=e=>{ const one=sel.size===1?objById([...sel][0]):null; if(one&&one.t==="splash"){ one.material=e.target.value; refreshAll(); } };
   if(byId("opFont")) byId("opFont").onchange=e=>textFont=e.target.value;
@@ -3163,13 +3296,15 @@ function onDown(e){
     const gv=gutterVertexHit(pt); if(gv){ vertexDrag={o:gv.o,idx:gv.idx,oldPos:{x:gv.o.pts[gv.idx].x,y:gv.o.pts[gv.idx].y}}; return; }
     const hit=hitTest(pt);
     if(hit){
-      if(hit.kind==="seglen"||hit.kind==="dsnote"||hit.kind==="strokelabel"||hit.kind==="dssize"){
-        // grab a measurement number / note / demo+screen footage label: dragging moves just
-        // that label (offset stored on its parent object); a tap on a seglen/note opens its editor.
+      if(hit.kind==="seglen"||hit.kind==="dsnote"||hit.kind==="strokelabel"||hit.kind==="dssize"||hit.kind==="customtag"){
+        // grab a measurement number / note / demo+screen footage label / custom product tag:
+        // dragging moves just that label (offset stored on its parent object); a tap on a
+        // seglen/note opens its editor.
         const o=objById(hit.objId);
         const cur = hit.kind==="dsnote" ? (o&&o.noteOff)
                   : hit.kind==="dssize" ? (o&&o.sizeOff)
                   : hit.kind==="strokelabel" ? (o&&o.labelOff)
+                  : hit.kind==="customtag" ? (o&&o.tagOff)
                   : (o&&o.segLabelOff&&o.segLabelOff[hit.seg]);
         const startOff = cur ? {x:cur.x||0,y:cur.y||0} : {x:0,y:0};
         press={pt,mode:"moveLabel",hit,startOff,moved:false};
@@ -3214,9 +3349,17 @@ function onDown(e){
     draw(); return;
   }
   if(tool==="custom"){
+    // item products are tap-to-place, so this has to come before any drawing path
+    if(productMode(productOf(activeCustom))==="item"){
+      if(e.pointerType==="touch"){ pendingTap={tool:"item", w:{x:cursorW.x,y:cursorW.y}, downPt:pt}; return; }
+      placeTapObject("item", cursorW); return;
+    }
     if(customStrokeMode()){ drawing={t:"custom",stroke:true,productId:activeCustom,pts:[w]}; draw(); return; }  // freehand stroke product
-    if(!drawing){ drawing={t:"custom",pts:[snapW(w)]}; }
-    else { drawing.pts.push(snapW(w)); }
+    // snapping onto another run of the same product welds them into one labelled group
+    const ce=findCustomEndNear(w,activeCustom);
+    const np = ce ? {x:ce.pt.x,y:ce.pt.y} : snapW(w);
+    if(!drawing){ drawing={t:"custom",pts:[np]}; }
+    else { drawing.pts.push(np); }
     draw(); return;
   }
   if(tool==="ds"||tool==="valley"||tool==="stamp"||tool==="splash"){
@@ -3247,6 +3390,9 @@ function placeTapObject(which, w){
     P.objects.push(o); sel=new Set([o.id]); refreshAll();
   } else if(which==="stamp"){
     const o={t:"stamp",id:uid(),x:w.x,y:w.y,text:activeStamp.text,color:activeStamp.color,font:P.settings.defaultFont};
+    P.objects.push(o); sel=new Set([o.id]); refreshAll();
+  } else if(which==="item"){
+    const o={t:"item",id:uid(),x:w.x,y:w.y,productId:activeCustom};
     P.objects.push(o); sel=new Set([o.id]); refreshAll();
   }
 }
@@ -3319,6 +3465,7 @@ function onMove(e){
         if(press.hit.kind==="dsnote"){ o.noteOff={x:nx,y:ny}; }
         else if(press.hit.kind==="dssize"){ o.sizeOff={x:nx,y:ny}; }
         else if(press.hit.kind==="strokelabel"){ o.labelOff={x:nx,y:ny}; }
+        else if(press.hit.kind==="customtag"){ o.tagOff={x:nx,y:ny}; }
         else { o.segLabelOff=o.segLabelOff||{}; o.segLabelOff[press.hit.seg]={x:nx,y:ny}; }
       }
       draw();
@@ -3377,6 +3524,12 @@ function onUp(e){
           if(!e.shiftKey){ sel.clear(); segSel.clear(); }
           sel.add(press.hit.objId);
           setHint("Downspout selected — drag the 3×4 tag to move it clear of the drawing • double-tap the tag to snap it back.");
+        }
+        // same for a custom product's name tag — it names the product, not this run
+        else if(press.hit && press.hit.kind==="customtag"){
+          if(!e.shiftKey){ sel.clear(); segSel.clear(); }
+          sel.add(press.hit.objId);
+          setHint("Custom line selected — drag the product tag to move it clear of the drawing • double-tap the tag to snap it back.");
         }
       }
       else { recordHistory(); }
@@ -3460,6 +3613,7 @@ function onDbl(e){
     if(hit.kind==="dsnote" && o.noteOff){ o.noteOff=null; cleared=true; }
     else if(hit.kind==="dssize" && o.sizeOff){ o.sizeOff=null; cleared=true; }
     else if(hit.kind==="strokelabel" && o.labelOff){ o.labelOff=null; cleared=true; }
+    else if(hit.kind==="customtag" && o.tagOff){ o.tagOff=null; cleared=true; }
     else if(hit.kind==="seglen" && o.segLabelOff && o.segLabelOff[hit.seg]){ delete o.segLabelOff[hit.seg]; cleared=true; }
     if(cleared){ recordHistory(); setHint("Label snapped back to its anchor."); refreshAll(); }
   }
@@ -3954,7 +4108,8 @@ function buildEstimatePane(){
   if(r.customRows && r.customRows.length){
     h+=`<div class="sec-h" style="margin-top:10px">Custom products</div>`;
     for(const c of r.customRows){
-      h+=`<div class="totline foot"><span><span class="swatch" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${c.color};vertical-align:middle;margin-right:5px"></span>${esc(c.name)} <span style="color:var(--text-soft);font-size:11px">${ftStr(c.feet)} @ ${money(c.rate)}/ft</span></span><span class="v">${money(c.amount)}</span></div>`;
+      const cq = c.unit==="ea" ? `${c.qty} ea @ ${money(c.rate)} each` : `${ftStr(c.feet)} @ ${money(c.rate)}/ft`;
+      h+=`<div class="totline foot"><span><span class="swatch" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${c.color};vertical-align:middle;margin-right:5px"></span>${esc(c.name)} <span style="color:var(--text-soft);font-size:11px">${cq}</span></span><span class="v">${money(c.amount)}</span></div>`;
     }
   }
   if(r.demoFeet>0 || (r.screenRows && r.screenRows.length)){
@@ -4156,7 +4311,7 @@ function buildPricingPane(){
   h+=`<div class="fld"><label>Default downspout size</label><select id="pcDsDef">${dsAllowed.map(id=>`<option value="${id}" ${s.defaultDownspoutSize===id?"selected":""}>${dsStyle(id).label}</option>`).join("")}</select></div>`;
   h+=`<div class="fld"><label>Type footage → resize line to scale</label><div class="seg-toggle"><button data-roe="1" class="${s.resizeOnEdit!==false?"on":""}">On</button><button data-roe="0" class="${s.resizeOnEdit===false?"on":""}">Off</button></div></div>`;
   h+=`<div class="note">When on, typing a segment's footage redraws that segment to scale (using your ft-per-square / calibration) and drags the rest of the run along, keeping corners connected.</div>`;
-  h+=`<div class="fld"><label>Measurement label size <span style="color:var(--text-soft);font-weight:600">${Math.round((s.labelSize||1)*100)}%</span></label><input type="range" id="pcLabelSize" min="0.4" max="3" step="0.1" value="${s.labelSize||1}" style="width:100%"></div>`;
+  h+=`<div class="fld"><label>Measurement label size <span style="color:var(--text-soft);font-weight:600">${Math.round((s.labelSize||1.2)*100)}%</span></label><input type="range" id="pcLabelSize" min="0.4" max="3" step="0.1" value="${s.labelSize||1.2}" style="width:100%"></div>`;
   h+=`<div class="note">Labels scale with zoom, so they stay proportional on big jobs and don't overlap when the diagram is fit-to-page in the PDF. Raise this if labels look too small.</div>`;
   h+=`<div class="fld"><label>Regular (≈90°) miter style</label><div class="seg-toggle"><button data-mit="box" class="${s.regularMiter==="box"?"on":""}">Box miter</button><button data-mit="strip" class="${s.regularMiter==="strip"?"on":""}">Strip miter</button></div></div>`;
   h+=`<div class="fld">${fld("Bay miter if ±° from 90","pcBay",s.bayDeviation,"number",'step="1" inputmode="decimal"')}</div>`;
@@ -4271,25 +4426,36 @@ function openCustomProduct(editId){
   const ex = editId!=null ? productOf(editId) : null;
   let h="";
   const exMode=(ex&&ex.mode)||"line";
-  h+=`<div class="note" style="margin-bottom:10px">Define a product priced per foot — it becomes its own tool. <b>Line</b> draws a measured run; <b>Demo</b> and <b>Screen</b> behave like the highlight tools (drag over the runs).</div>`;
+  h+=`<div class="note" style="margin-bottom:10px">Define a product and it becomes its own tool. <b>Line</b> draws a measured run priced per foot; <b>Demo</b> and <b>Screen</b> behave like the highlight tools (drag over the runs); <b>Item</b> is tapped down one at a time and priced each.</div>`;
   h+=`<div class="fld"><label>Product name</label><input id="cpName" type="text" value="${ex?esc(ex.name):''}" placeholder="e.g. Fascia wrap, Drip edge, Gutter guard"></div>`;
-  h+=`<div class="fld"><label>Behavior</label><select id="cpMode"><option value="line"${exMode==="line"?' selected':''}>Line — measured run</option><option value="demo"${exMode==="demo"?' selected':''}>Demo highlight — round up to whole ft</option><option value="screen"${exMode==="screen"?' selected':''}>Screen highlight — round up to 4 ft</option></select></div>`;
+  h+=`<div class="fld"><label>Behavior</label><select id="cpMode"><option value="line"${exMode==="line"?' selected':''}>Line — measured run</option><option value="demo"${exMode==="demo"?' selected':''}>Demo highlight — round up to whole ft</option><option value="screen"${exMode==="screen"?' selected':''}>Screen highlight — round up to 4 ft</option><option value="item"${exMode==="item"?' selected':''}>Item — tap to place, priced each</option></select></div>`;
   h+=`<div class="row2">`;
-  h+=`<div class="fld"><label>Price per foot ($)</label><input id="cpPrice" type="number" step="0.25" inputmode="decimal" value="${ex?ex.pricePerFoot:''}"></div>`;
+  // one price field for every mode: old saves and this modal keep the same shape, and for an
+  // item `pricePerFoot` simply means $/each
+  h+=`<div class="fld"><label id="cpPriceLbl">Price ${exMode==="item"?"each":"per foot"} ($)</label><input id="cpPrice" type="number" step="0.25" inputmode="decimal" value="${ex?ex.pricePerFoot:''}"></div>`;
   h+=`<div class="fld"><label>Color</label><div class="colorsel"><span class="swatch" id="cpSw" style="background:${ex?ex.color:'#7a4fd6'}"></span><input id="cpColor" type="color" value="${ex&&/^#[0-9a-f]{6}$/i.test(ex.color)?ex.color:'#7a4fd6'}" style="width:46px;height:32px;border:0;background:none;cursor:pointer"></div></div>`;
   h+=`</div>`;
+  h+=`<div class="fld" id="cpTagRow" style="display:${exMode==="item"?"block":"none"}"><label>Symbol on the diagram (2–4 characters)</label><input id="cpTag" type="text" maxlength="4" value="${ex&&ex.tag?esc(ex.tag):''}" placeholder="${esc(productTag(ex||{}))}" style="width:110px;text-transform:uppercase"></div>`;
   h+=`<div style="margin-top:6px"><button class="btn-sm" id="cpSave" style="background:var(--prime);color:#fff;border-color:var(--prime)">${ex?'Save changes':'Add product'}</button></div>`;
   if(list.length){
     h+=`<div class="sec-h">Your custom products</div>`;
-    list.forEach(p=>{ const md=(p.mode&&p.mode!=="line")?` · ${p.mode}`:""; h+=`<div class="stamp-preset"><span class="swatch" style="background:${p.color};width:18px;height:18px"></span><span style="flex:1;font-weight:700">${esc(p.name)} — ${money(p.pricePerFoot)}/ft${md}</span><button class="btn-sm" data-edit="${p.id}">Edit</button><button class="btn-sm danger" data-del="${p.id}">✕</button></div>`; });
+    list.forEach(p=>{ const md=(p.mode&&p.mode!=="line")?` · ${p.mode}`:""; const un=productMode(p)==="item"?" ea":"/ft"; h+=`<div class="stamp-preset"><span class="swatch" style="background:${p.color};width:18px;height:18px"></span><span style="flex:1;font-weight:700">${esc(p.name)} — ${money(p.pricePerFoot)}${un}${md}</span><button class="btn-sm" data-edit="${p.id}">Edit</button><button class="btn-sm danger" data-del="${p.id}">✕</button></div>`; });
   }
   openModal(ex?"Edit custom product":"Custom product",h);
   byId("cpColor").oninput=e=>byId("cpSw").style.background=e.target.value;
+  byId("cpMode").onchange=e=>{
+    const item=e.target.value==="item";
+    byId("cpPriceLbl").textContent="Price "+(item?"each":"per foot")+" ($)";
+    byId("cpTagRow").style.display=item?"block":"none";
+  };
+  // the placeholder is the symbol the diagram will actually use if the field is left blank
+  byId("cpName").oninput=()=>{ byId("cpTag").placeholder=productTag({name:byId("cpName").value}); };
   byId("cpSave").onclick=()=>{
     const name=(byId("cpName").value||"").trim(); if(!name){ byId("cpName").focus(); return; }
     const price=+byId("cpPrice").value||0, color=byId("cpColor").value, mode=byId("cpMode").value;
-    if(ex){ ex.name=name; ex.pricePerFoot=price; ex.color=color; ex.mode=mode; closeModal(); buildDock(); buildOptbar(); refreshAll(); }
-    else { const np={id:uid(),name,pricePerFoot:price,color,mode}; list.push(np); closeModal(); buildDock(); refreshAll(); setTool("custom:"+np.id); }
+    const tag=(mode==="item") ? (byId("cpTag").value||"").trim().toUpperCase().slice(0,4) : "";
+    if(ex){ ex.name=name; ex.pricePerFoot=price; ex.color=color; ex.mode=mode; ex.tag=tag; closeModal(); buildDock(); buildOptbar(); setHint(toolHint(tool)); refreshAll(); }
+    else { const np={id:uid(),name,pricePerFoot:price,color,mode}; if(tag) np.tag=tag; list.push(np); closeModal(); buildDock(); refreshAll(); setTool("custom:"+np.id); }
   };
   byId("modalBody").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openCustomProduct(b.dataset.edit));
   byId("modalBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
@@ -4298,7 +4464,7 @@ function openCustomProduct(editId){
     if(confirm('Delete "'+doomed.name+'" and remove its drawn runs?')){
       recordHistory();
       P.settings.customProducts=list.filter(p=>!sameProductId(p.id,id));
-      P.objects=P.objects.filter(o=>!(o.t==="custom"&&sameProductId(o.productId,id)));
+      P.objects=P.objects.filter(o=>!((o.t==="custom"||o.t==="item")&&sameProductId(o.productId,id)));
       if(sameProductId(activeCustom,id)){ activeCustom=null; setTool("gutter"); }
       buildDock(); refreshAll(); openCustomProduct();
     }
@@ -4379,6 +4545,8 @@ function openSettings(){
   h+=`<div class="row3">${fld("Ft / elbow","stElbow",s.footagePerElbow,"number")}${fld("Ft / offset","stOffset",s.footagePerOffset,"number")}${fld("Ft / end cap","stEndcap",s.footagePerEndcap,"number")}</div>`;
   h+=`<div class="sec-h">Money</div>`;
   h+=`<div class="row3">${fld("Deposit %","stDep",s.depositPct,"number")}${fld("Card fee %","stCard",s.cardFee,"number")}${fld("Misc/Demo $","stMisc",s.miscDemoLabor,"number")}</div>`;
+  h+=`<div class="sec-h">Diagram</div>`;
+  h+=`<div class="fld"><label><input type="checkbox" id="stDsSize" ${s.showDsSize?"checked":""}> Show the downspout size tag (3×4) on the diagram</label></div>`;
   h+=`<div class="note">These defaults drive automatic takeoff and pricing. They mirror the controls in the Pricing tab.</div>`;
   openModal("Job defaults & rules",h);
   const b=byId("modalBody");
@@ -4389,6 +4557,7 @@ function openSettings(){
   num("stCorner","footagePerCorner");num("stOutlet","footagePerOutlet");num("stValley","footagePerValley");
   num("stElbow","footagePerElbow");num("stOffset","footagePerOffset");num("stEndcap","footagePerEndcap");
   num("stDep","depositPct");num("stCard","cardFee");num("stMisc","miscDemoLabor");
+  { const dz=byId("stDsSize"); if(dz) dz.onchange=()=>{ s.showDsSize=dz.checked; buildOptbar(); refreshAll(); }; }
 }
 byId("btnSettings").onclick=openSettings;
 
@@ -5288,18 +5457,23 @@ async function buildEstimateHTML(chosen){
   };
   // Page-1 header. Empty fields are dropped rather than printed as blank boxes — the card has
   // to stay short so the diagram below it gets the page.
-  const brandHead=`<div class="brand"><div><div class="bname">Prime Seamless Gutters &amp; Roofing</div><div class="bcontact">San Antonio &nbsp;·&nbsp; (210) 246-3931 &nbsp;·&nbsp; info@primeseamless.com</div></div>
-      <div class="bmeta"><div class="blbl">Commercial / Residential Estimate</div>${esc(fmtDate(m.date))} &nbsp;·&nbsp; Quote good for 30 days</div></div>`;
+  const brandHead=`<div class="brand"><div class="bname">Prime Seamless Gutters &amp; Roofing</div></div>`;
   const miniHead=`<div class="brand mini"><div class="bname">Prime Seamless Gutters &amp; Roofing</div><div class="bmeta">${m.name?esc(m.name)+" &nbsp;·&nbsp; ":""}${esc(fmtDate(m.date))}</div></div>`;
   const cf=(label,val,big)=>String(val||"").trim()?`<div class="cf"><span class="cl">${label}</span><span class="cv${big?" big":""}">${esc(String(val).trim())}</span></div>`:"";
   const rep=[m.salesperson,fmtPhone(m.salespersonPhone)].map(v=>String(v||"").trim()).filter(Boolean).join("  ·  ");
-  const custCols=[cf("Customer",m.name,1)+cf("Address",m.address),
-    cf("Phone",fmtPhone(m.phone))+cf("Cell",fmtPhone(m.cell))+cf("E-mail",m.email),
-    cf("Gate code",m.gateCode)+cf("Prepared by",rep)].filter(Boolean);
-  const custCard=custCols.length?`<div class="cust" style="grid-template-columns:${custCols.map((c,i)=>i?"1fr":"1.3fr").join(" ")}">${custCols.map(c=>`<div>${c}</div>`).join("")}</div>`:"";
+  // Fixed 2 rows x 3 columns, read left to right: name / address / phone, then e-mail / gate / rep.
+  // Cell shares the phone slot rather than taking a fourth column — the rep reads the card top-down
+  // in a stacked packet, and a wider card is a shorter diagram.
+  const phoneSlot=cf("Phone",fmtPhone(m.phone))+cf("Cell",fmtPhone(m.cell));
+  // an empty slot stays in the grid so the columns still line up; only an entirely blank ROW goes,
+  // and with both rows blank there's no card at all (pdfBoxFor models exactly this)
+  const custRows=[[cf("Customer",m.name,1), cf("Address",m.address,1), phoneSlot],
+                  [cf("E-mail",m.email), cf("Gate code",m.gateCode), cf("Prepared by",rep)]]
+                 .filter(r=>r.some(Boolean));
+  const custCard=custRows.length?`<div class="cust">${custRows.map(r=>r.map(c=>`<div>${c}</div>`).join("")).join("")}</div>`:"";
 
-  // Each option: a diagram page (header, diagram, prices) up front; its colors, materials,
-  // terms and notes go on the last page(s) of the document.
+  // Packet order: diagram -> job details (colors, material list, terms, notes) -> warranty ->
+  // photos -> color chart -> the prep-for-installation page, which is always last.
   let diagramPages="", detailPages="";
   for(let k=0;k<chosen.length;k++){
     const opt=OPTIONS[chosen[k]]; if(!opt) continue;
@@ -5320,16 +5494,21 @@ async function buildEstimateHTML(chosen){
     // footage isn't a price, so it lives in the summary beside the price stack
     const priceBlock=`<div class="price">
       <div class="summary"><div class="cl">Job summary</div><div class="stats">
-        <div class="stat"><span>Gutter</span><b>${ftStr(r.gutterFootage)}</b></div>
-        <div class="stat"><span>Downspout</span><b>${ftStr(r.dsFootage)}</b></div></div></div>
+        <div class="stat"><span>Gutter</span><b>${ftStr(r.gutterFootage)}</b><i><span class="ssw" style="background:${swatchHex(s.gutterColor,gBrand)}"></span>${esc(gBrand)} ${esc(s.gutterColor)}</i></div>
+        <div class="stat"><span>Downspout</span><b>${ftStr(r.dsFootage)}</b><i><span class="ssw" style="background:${swatchHex(s.downspoutColor,dBrand)}"></span>${esc(dBrand)} ${esc(s.downspoutColor)}</i></div></div></div>
       <div class="stack"><table class="tot">${priceRows}</table>
         <div class="grand"><span>Turnkey Total</span><span class="gv">${money(r.grand)}</span></div></div>
     </div>
-    <p class="cardnote">A ${r1(+s.cardFee||0)}% fee applies to credit &amp; debit card payments and ${r1(+s.amexFee||0)}% to American Express. No fee for cash or check.</p>`;
+    <p class="cardnote">A ${r1(+s.cardFee||0)}% fee applies to credit &amp; debit card payments and ${r1(+s.amexFee||0)}% to American Express. No fee for cash or check.</p>`
+    // Page 1 only, and inline rather than position:fixed — page 1's height is budgeted by pdfBoxFor,
+    // so PDFL.foot is subtracted from the diagram box there; a fixed footer would repeat on, and
+    // overlap, every later page of the native PDF.
+    + (k===0?`<div class="pfoot"><b>Prime Seamless Gutters &amp; Roofing, LLC</b> &nbsp;·&nbsp; San Antonio &nbsp;·&nbsp; Austin &nbsp;·&nbsp; (210) 246-3931 &nbsp;·&nbsp; info@primeseamless.com<br>Commercial / Residential Estimate &nbsp;·&nbsp; ${esc(fmtDate(m.date))} &nbsp;·&nbsp; Quote good for 30 days</div>`:"");
     const stripTxt=n=>[showHeads?esc(opt.name):"", nPg>1?`Diagram page ${n} of ${nPg}`:""].filter(Boolean).join(" — ");
     const strip = stripTxt(1) ? `<div class="optstrip">${stripTxt(1)}</div>` : "";
     const boxOf=pg=>pdfBoxFor(pg,{meta:m, settings:s, r, nPages:frames.length, first:k===0, multi:showHeads});
-    diagramPages += `<section class="p1${k>0?" pgbreak":""}">${k===0?brandHead+custCard:miniHead}${strip}${diagram?`<div class="dg" style="height:${boxOf(0).h}px">${diagram}</div>`:""}${priceBlock}</section>`;
+    // customer first: the estimate is stacked in a packet, so who it's for has to read off the top edge
+    diagramPages += `<section class="p1${k>0?" pgbreak":""}">${k===0?custCard+brandHead:miniHead}${strip}${diagram?`<div class="dg" style="height:${boxOf(0).h}px">${diagram}</div>`:""}${priceBlock}</section>`;
     // later pages follow their own page 1, so an option's diagram pages stay together
     laterDiagrams.forEach((svg,j)=>{
       if(svg) diagramPages += `<section class="p1 pgbreak">${miniHead}<div class="optstrip">${stripTxt(j+2)}</div><div class="dg" style="height:${boxOf(1).h}px">${svg}</div></section>`;
@@ -5376,12 +5555,13 @@ async function buildEstimateHTML(chosen){
     .pgbreak{break-before:page;page-break-before:always}
     .brand{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;border-bottom:2.5px solid #c8202a;padding-bottom:7px}
     .bname{color:#c8202a;font-size:19px;font-weight:800}
-    .bcontact{color:#5b6b7a;font-size:10.5px;margin-top:3px}
     .bmeta{text-align:right;font-size:10.5px;color:#5b6b7a;line-height:1.45;white-space:nowrap}
-    .blbl{font-size:8.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:#1b2530}
     .brand.mini{align-items:baseline;padding-bottom:5px}
     .brand.mini .bname{font-size:14px}
-    .cust{display:grid;gap:0 18px;background:#f3f6f9;border:1px solid #e1e7ed;border-radius:7px;padding:6px 12px 3px;margin-top:9px}
+    /* margin-BOTTOM, not top: the card now sits above the letterhead and page 1's height still has to add up to pdfBoxFor's sum */
+    /* equal thirds — CUST_COL budgets page 1 against exactly this, so don't re-weight the columns
+       without changing it too. margin-BOTTOM: the card sits above the letterhead. */
+    .cust{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 18px;background:#f3f6f9;border:1px solid #e1e7ed;border-radius:7px;padding:6px 12px 3px;margin-bottom:9px}
     .cf{margin-bottom:4px;min-width:0}
     .cl{display:block;font-size:8.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#7a8896}
     .cv{display:block;font-size:11.5px;line-height:1.3;overflow-wrap:anywhere}
@@ -5396,6 +5576,9 @@ async function buildEstimateHTML(chosen){
     .stat{flex:1;background:#f3f6f9;border:1px solid #e1e7ed;border-radius:6px;padding:6px 10px}
     .stat span{display:block;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#5b6b7a}
     .stat b{display:block;font-size:17px;margin-top:1px}
+    /* the color the rep is quoting, right beside the footage — per-object overrides stay on the material list */
+    .stat i{display:block;font-style:normal;font-size:9.5px;line-height:1.25;color:#3d4c5b;margin-top:2px;overflow-wrap:anywhere}
+    .stat .ssw{display:inline-block;width:9px;height:9px;border-radius:50%;border:1px solid rgba(0,0,0,.3);vertical-align:middle;margin-right:4px}
     .stack{width:3.5in;flex:0 0 auto}
     .tot{font-size:12px}
     .tot td{padding:4px 8px;border-bottom:1px solid #e8edf2}
@@ -5406,6 +5589,8 @@ async function buildEstimateHTML(chosen){
     .grand span{font-size:14px;font-weight:700}
     .grand .gv{font-size:22px;font-weight:800}
     .cardnote{margin:5px 0 0;font-size:9.5px;color:#5b6b7a;text-align:right}
+    .pfoot{margin-top:10px;padding-top:6px;border-top:1px solid #dde4ea;text-align:center;font-size:9.5px;line-height:1.3;color:#5b6b7a}
+    .pfoot b{color:#c8202a;font-weight:800}
     .dtitle{font-size:18px;color:#1b2530;margin:0 0 10px;padding-bottom:6px;border-bottom:2.5px solid #c8202a}
     .chart-page{break-before:page;page-break-before:always}
     .photo-head{break-before:page;page-break-before:always}
@@ -5444,11 +5629,11 @@ async function buildEstimateHTML(chosen){
 
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Estimate ${esc(m.name||"")}</title><style>${css}</style></head><body>
     ${diagramPages}
-    ${colorChartHTML}
+    ${detailPages}
     ${warrantyHTML}
     ${photosHTML}
+    ${colorChartHTML}
     ${infoPageHTML}
-    ${detailPages}
     <button class="noprint" onclick="window.print()" style="padding:10px 16px;background:#c8202a;color:#fff;border:0;border-radius:8px;font-weight:700;cursor:pointer">Print this estimate</button>
     </body></html>`;
   return html;
