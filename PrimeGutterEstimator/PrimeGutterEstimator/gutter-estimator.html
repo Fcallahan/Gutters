@@ -296,7 +296,9 @@ input,select,textarea{font-family:inherit;font-size:13px}
 }
 
 /* floating inline editor */
-#floatEdit{position:absolute;z-index:20;display:none}
+/* z-index:35 — above #photoStage/#pdfStage (30), so the Photos page's shared text editor
+   (openPhotoTextEditor) isn't rendered invisibly behind the photo cards it edits. */
+#floatEdit{position:absolute;z-index:35;display:none}
 #floatEdit input,#floatEdit textarea{
   border:2px solid var(--prime);border-radius:6px;padding:5px 7px;font-family:var(--mono);font-weight:700;
   box-shadow:0 6px 18px rgba(0,0,0,.25);background:#fff;min-width:60px
@@ -312,18 +314,53 @@ input,select,textarea{font-family:inherit;font-size:13px}
   gap:8px;padding:7px 14px;color:#dce6ef;flex:0 0 auto;
 }
 #photoBar .tb-spacer{flex:1 1 0;min-width:0}
-#photoHint{flex:1 1 160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#photoWidth{width:72px}
+#photoHint{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:15;
+  background:rgba(27,37,48,.93);color:#fff;padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;
+  box-shadow:0 6px 18px rgba(0,0,0,.3);pointer-events:none;max-width:80%;text-align:center;display:none}
+/* Tool buttons carry both an icon glyph and a short label — plain characters (✎ ▬ ➔ …),
+   not inline SVG: this toolbar already used unicode glyphs successfully (✎ ╱ T 📷) before
+   this feature, so adding 7 more in the same voice is cheaper than a parallel ICON map and
+   renders identically well at these sizes. Labels drop at the iPad breakpoint; the glyph
+   alone (with its title tooltip) still identifies the tool. */
+.ptool .ptlbl{margin-left:2px}
 /* Narrow (iPad portrait, or landscape with the rail open): drop the decorative label,
    the hint and the spacer so the controls pack tightly instead of pushing each other
    onto extra rows. The tools themselves always stay on screen. */
 @media (max-width:1100px){
-  #photoHint,#photoBarTitle{display:none}
+  #photoBarTitle{display:none}
   #photoBar .tb-spacer{display:none}
   #photoBar .tb-btn{padding:6px 9px}
-  #photoWidth{width:58px}
+  .ptool .ptlbl{display:none}
 }
-#photoScroll{flex:1;overflow:auto;background:#9aa6b1;padding:18px;display:flex;flex-wrap:wrap;gap:18px;align-content:flex-start}
+/* contextual per-tool options — same idiom as the Diagram's #optbarWrap/#optbar, but
+   inline in the page flow (Photos has no floating dock to clear) */
+#photoOptbarWrap{background:#182634;border-bottom:1px solid #24384c;flex:0 0 auto;overflow:hidden}
+/* selecting a mark swaps the one-line hint for its controls — ease that in instead of popping (animatePhotoOptbar) */
+#photoOptbar.ob-drop{animation:obDrop .22s cubic-bezier(.2,.8,.2,1)}
+@keyframes obDrop{from{opacity:0;transform:translateY(-8px)}}
+@media (prefers-reduced-motion:reduce){ #photoOptbar.ob-drop{animation:none} }
+#photoOptbar{display:flex;align-items:center;gap:10px;padding:8px 14px;overflow-x:auto;color:#dce6ef;min-height:26px}
+#photoOptbar .ob-grp{display:flex;align-items:center;gap:6px;white-space:nowrap}
+#photoOptbar .ob-grp label{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#9fb0c0}
+#photoOptbar .div{width:1px;height:22px;background:#33455a;flex:0 0 auto}
+#photoOptbar input[type=range]{width:110px}
+.pal-chip{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;flex:0 0 auto}
+.pal-chip.active{border-color:#fff;box-shadow:0 0 0 2px #2b7fd0}
+.pal-chip.none{background:#fff;position:relative}
+.pal-chip.none::after{content:"";position:absolute;left:3px;right:3px;top:50%;height:2px;background:#e01b24;transform:rotate(45deg)}
+.pal-chip.add{background:#243240;color:#dce6ef;font-weight:800;font-size:16px;display:flex;align-items:center;justify-content:center}
+@media (pointer:coarse){
+  #photoOptbar{padding:10px 14px}
+  #photoOptbar select,#photoOptbar input[type=number]{font-size:16px;padding:8px 10px}
+  #photoOptbar input[type=range]{height:36px;width:140px}
+  #photoOptbar .chip{padding:9px 14px;font-size:14px;min-height:40px}
+  .pal-chip{width:40px;height:40px}
+}
+/* scrollbar-gutter keeps clientWidth constant whether or not the pane overflows. Without it
+   renderPhotos() measures the empty (scrollbar-free) pane, sizes the columns a scrollbar too
+   wide, and the last column wraps — putting back the dead strip this layout exists to remove.
+   On iOS scrollbars are overlays, so the gutter costs nothing there. */
+#photoScroll{flex:1;overflow:auto;scrollbar-gutter:stable;background:#9aa6b1;padding:18px;display:flex;flex-wrap:wrap;gap:18px;align-content:flex-start}
 .photo-card{background:#fff;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);overflow:hidden;position:relative}
 .photo-card canvas{display:block;cursor:crosshair;touch-action:none}
 .photo-card .pc-bar{display:flex;gap:6px;align-items:center;padding:7px 9px;border-top:1px solid var(--line);background:#f6f8fa}
@@ -345,6 +382,27 @@ input,select,textarea{font-family:inherit;font-size:13px}
 
 /* modal */
 #modalWrap{position:fixed;inset:0;background:rgba(15,22,30,.55);z-index:50;display:none;align-items:center;justify-content:center;padding:20px}
+
+/* Burst camera — an in-app viewfinder. iOS's capture sheet hands back one photo and
+   closes, so shooting a whole elevation meant re-tapping "Take photo" for every frame.
+   Sits above the modal; openCamera() falls back to #cameraInput where getUserMedia
+   isn't available. */
+#camStage{position:fixed;inset:0;z-index:60;background:#000;display:none;flex-direction:column}
+#camVideo{flex:1 1 auto;min-height:0;width:100%;object-fit:contain;background:#000}
+#camFlash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .16s}
+#camMsg{position:absolute;left:0;right:0;top:46%;text-align:center;color:#fff;font-weight:800;font-size:16px;text-shadow:0 2px 10px #000;pointer-events:none}
+#camBar{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 16px;
+  padding-bottom:calc(10px + env(safe-area-inset-bottom));background:rgba(12,18,26,.96);color:#dce6ef}
+#camBar button{border:0;border-radius:9px;font-weight:800;font-size:15px;cursor:pointer;padding:12px 18px;white-space:nowrap}
+#camCancel,#camFlip{background:#3a4d61;color:#dce6ef}
+#camDone{background:#e01b24;color:#fff}
+#camDone[disabled]{background:#2c3c4d;color:#7d8c9b;cursor:default}
+/* Big round shutter: it is hit with a thumb, one-handed, on a ladder. */
+#camShot{width:62px;height:62px;border-radius:50%;background:#fff;border:4px solid #b8c4cf;padding:0;flex:0 0 auto}
+#camShot:active{background:#cdd4d9}
+/* Thumbnails of this burst, so the rep can see the count grow without leaving the camera. */
+#camStrip{flex:1 1 0;min-width:0;display:flex;gap:6px;overflow-x:auto;align-items:center}
+#camStrip img{height:50px;width:auto;border-radius:6px;border:2px solid #4a5b6c;flex:0 0 auto}
 .modal{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.4)}
 .modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
 .modal-h h3{margin:0;font-size:16px}
@@ -361,7 +419,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .rail-scroll::-webkit-scrollbar-thumb{background:#c2cbd4;border-radius:6px;border:2px solid var(--rail);background-clip:content-box}
 
 @media print{
-  #topbar,#optionsBar,#dock,#optbarWrap,#statusbar,#hint,#rail .rail-tabs,#photoBar{display:none!important}
+  #topbar,#optionsBar,#dock,#optbarWrap,#statusbar,#hint,#rail .rail-tabs,#photoBar,#camStage{display:none!important}
 }
 </style>
 </head>
@@ -389,7 +447,10 @@ input,select,textarea{font-family:inherit;font-size:13px}
     <button class="tb-btn" id="btnSave">Save</button>
     <button class="tb-btn primary" id="btnPrint">Print / PDF</button>
     <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
-    <input type="file" id="photoInput" accept="image/*" multiple style="display:none">  </div>
+    <input type="file" id="photoInput" accept="image/*" multiple style="display:none">
+    <!-- Separate input for the camera: `capture` jumps straight to the camera instead of the
+         pick-a-source sheet, and iOS ignores it when `multiple` is also present. -->
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">  </div>
 
   <div id="optionsBar"></div>
 
@@ -461,26 +522,32 @@ input,select,textarea{font-family:inherit;font-size:13px}
       <div id="photoStage">
         <div id="photoBar">
           <strong id="photoBarTitle" style="letter-spacing:.4px">PHOTO MARKUP</strong>
-          <span style="color:#9fb0c0;font-size:12px" id="photoHint">Import photos and mark up the runs.</span>
-          <div class="tb-spacer"></div>
-          <button class="tb-btn" id="btnAddPhoto">+ Add photos</button>          <div class="ob-grp" id="photoTools" style="display:flex;gap:4px;align-items:center">
-            <button class="tb-btn ptool" data-ptool="select">⬚ Select</button>
-            <button class="tb-btn ptool" data-ptool="pen">✎ Pen</button>
-            <button class="tb-btn ptool" data-ptool="line">╱ Line</button>
-            <button class="tb-btn ptool" data-ptool="text">T Text</button>
+          <div class="ob-grp" id="photoTools" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+            <button class="tb-btn ptool" data-ptool="select" title="Select (V)"><span class="pticon">⬚</span><span class="ptlbl">Select</span></button>
+            <button class="tb-btn ptool" data-ptool="pen" title="Pen (P)"><span class="pticon">✎</span><span class="ptlbl">Pen</span></button>
+            <button class="tb-btn ptool" data-ptool="highlight" title="Marker (M)"><span class="pticon">▬</span><span class="ptlbl">Marker</span></button>
+            <button class="tb-btn ptool" data-ptool="line" title="Line (L)"><span class="pticon">╱</span><span class="ptlbl">Line</span></button>
+            <button class="tb-btn ptool" data-ptool="rect" title="Box (R)"><span class="pticon">▭</span><span class="ptlbl">Box</span></button>
+            <button class="tb-btn ptool" data-ptool="ellipse" title="Oval (O)"><span class="pticon">◯</span><span class="ptlbl">Oval</span></button>
+            <button class="tb-btn ptool" data-ptool="arrow" title="Arrow (A)"><span class="pticon">➔</span><span class="ptlbl">Arrow</span></button>
+            <button class="tb-btn ptool" data-ptool="polygon" title="Shape (G)"><span class="pticon">⬠</span><span class="ptlbl">Shape</span></button>
+            <button class="tb-btn ptool" data-ptool="text" title="Text (T)"><span class="pticon">T</span><span class="ptlbl">Text</span></button>
+            <button class="tb-btn ptool" data-ptool="callout" title="Callout (C)"><span class="pticon">↖T</span><span class="ptlbl">Callout</span></button>
+            <button class="tb-btn ptool" data-ptool="eraser" title="Erase (E)"><span class="pticon">⌫</span><span class="ptlbl">Erase</span></button>
           </div>
           <div class="ob-grp" style="display:flex;gap:4px;align-items:center">
             <button class="tb-btn" id="photoUndo" title="Undo (Ctrl+Z)">↶</button>
             <button class="tb-btn" id="photoRedo" title="Redo (Ctrl+Y)">↷</button>
           </div>
-          <div class="ob-grp" style="display:flex;gap:6px;align-items:center">
-            <input type="color" id="photoColor" value="#e01b24" style="width:34px;height:26px;border:0;background:none;cursor:pointer">
-            <input type="range" id="photoWidth" min="1" max="20" value="7" title="Line / pen width">
-          </div>
+          <div class="tb-spacer"></div>
+          <button class="tb-btn" id="btnTakePhoto" title="Open the camera">📷 Take photo</button>
+          <button class="tb-btn" id="btnAddPhoto">+ Add photos</button>
         </div>
+        <div id="photoOptbarWrap"><div id="photoOptbar"></div></div>
         <div id="photoScroll">
-          <div class="photo-empty">No photos yet — click “Add photos” to import.</div>
+          <div class="photo-empty">No photos yet — use “Take photo” or “Add photos”.</div>
         </div>
+        <div id="photoHint"></div>
         <div id="photoLineBar" style="display:none">
           <button id="plUndo" class="db-x">↶ Undo point</button>
           <button id="plDone" class="db-go">✓ Done</button>
@@ -489,8 +556,19 @@ input,select,textarea{font-family:inherit;font-size:13px}
              delete at all before, so marks could only be removed with a keyboard) -->
         <div id="photoSelBar" style="display:none">
           <button id="psEdit" class="db-x">✎ Edit text</button>
-          <button id="psSmaller" class="db-x" title="Smaller text">A−</button>
-          <button id="psBigger" class="db-x" title="Bigger text">A+</button>
+          <button id="psDup" class="db-x" title="Duplicate (Ctrl+D)">⧉ Duplicate</button>
+          <button id="psFront" class="db-x" title="Bring to front">Front</button>
+          <button id="psBack" class="db-x" title="Send to back">Back</button>
+          <button id="psFlip" class="db-x" title="Swap arrow head/tail">⇄ Flip</button>
+          <button id="psAlign" class="db-x">Align ▾</button>
+          <div id="psAlignRow" style="display:none;gap:8px">
+            <button id="psAlignL" class="db-x" title="Align left">⊣ Left</button>
+            <button id="psAlignCH" class="db-x" title="Align center (horizontal)">┃ Center</button>
+            <button id="psAlignR" class="db-x" title="Align right">⊢ Right</button>
+            <button id="psAlignT" class="db-x" title="Align top">⊤ Top</button>
+            <button id="psAlignCV" class="db-x" title="Align middle (vertical)">━ Middle</button>
+            <button id="psAlignB" class="db-x" title="Align bottom">⊥ Bottom</button>
+          </div>
           <button id="psDelete" class="db-del">🗑 <span id="psDelLabel">Delete</span></button>
           <button id="psClear" class="db-x">Deselect</button>
         </div>
@@ -505,12 +583,27 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <div class="tb-spacer"></div>
           <button class="tb-btn" id="pdfPagesBtn" title="Choose what each PDF diagram page shows">▭ Diagram pages</button>
           <button class="tb-btn" id="pdfRefresh" title="Rebuild the PDF">↻ Refresh</button>
+          <button class="tb-btn" id="pdfSign" title="Customer or rep signs; press and hold a signature on the PDF to drag it">✍ Sign</button>
           <button class="tb-btn" id="pdfShare" title="Save to Files, Mail, AirDrop or another app">⇪ Share / Save</button>
           <button class="tb-btn primary" id="pdfPrint">Print</button>
         </div>
         <div id="pdfHost"><div class="pdf-empty" id="pdfEmpty" style="display:none">Choose at least one option to include in the PDF.</div></div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- BURST CAMERA — shutter as many times as you like, Done imports them all -->
+<div id="camStage">
+  <video id="camVideo" playsinline autoplay muted></video>
+  <div id="camFlash"></div>
+  <div id="camMsg" style="display:none"></div>
+  <div id="camBar">
+    <button id="camCancel">✕ Cancel</button>
+    <div id="camStrip"></div>
+    <button id="camShot" title="Take a photo"></button>
+    <button id="camFlip" title="Switch camera" style="display:none">⟳ Flip</button>
+    <button id="camDone" disabled>✓ Done</button>
   </div>
 </div>
 
@@ -527,6 +620,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 const SPECTRA_COLORS = [
   {n:"Almond",        h:"#d9d8b8"},
   {n:"Antique Ivory", h:"#c7a877"},
+  {n:"Beaver Brown",  h:"#4b3a2a"},
   {n:"Black",         h:"#1c1c20"},
   {n:"Bronze",        h:"#4f4a44"},
   {n:"Clay",          h:"#a9a39b"},
@@ -605,7 +699,7 @@ const BOX_COLORS = ["#ffffff","#fde2e2","#ffe9cc","#fff7cc","#e2f4dd","#d9ecf7",
 
 function defaultProject(){
   return {
-    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:"",warrantyYears:"10",titleImage:""},
+    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:"",warrantyYears:"10",titleImage:"",signatures:[]},
     settings:{
       gutterType:"6K",            // default gutter style id (see GUTTER_STYLES)
       defaultDownspoutSize:"3x4", // default downspout size id (auto-follows the gutter style)
@@ -879,6 +973,9 @@ function resize(){
   canvas.width = Math.round(w*DPR);
   canvas.height= Math.round(h*DPR);
   updateOptbarFades();   // rail toggle / rotation / split view can all end the overflow
+  // Same events resize the photo pane; only rebuild when the column width actually moves,
+  // otherwise every resize tick throws away and re-decodes every card.
+  if(curPage==="photos" && photoCardWidth()!==photoCardW) renderPhotos();
   draw();
   pdfSyncFrame();        // the native PDF overlay doesn't follow web layout on its own
 }
@@ -1977,59 +2074,113 @@ function drawItem(o){
   addLabelBox("obj",o.id,box.x,box.y,box.w,box.h);
 }
 
-function textLines(o){
-  const fontPx=(o.size||14);
-  const prev=ctx.font;
-  ctx.font=fontPx+"px "+(o.font||"Arial");
-  const maxw=Math.max(12,(o.w||120)-16);
-  const out=[];
-  for(const raw of (o.text||"").split("\n")){
-    const words=raw.split(" ");
-    let cur="";
-    for(const wd of words){
-      const test=cur?cur+" "+wd:wd;
-      if(ctx.measureText(test).width>maxw && cur){ out.push(cur); cur=wd; }
-      else cur=test;
+/* ============================================================ */
+/* TEXT BOX  — one engine for the Diagram's {t:"text"} and a photo's                */
+/* {type:"text"} mark. The two pages differ only in coordinate space (world-px      */
+/* scaled by cam.scale vs. normalized 0..1 scaled by a card's cw/chh) and storage — */
+/* not in behavior. Callers convert to screen px and pass that as `px`/`maxWidthPx`. */
+/* ============================================================ */
+function textStyleFont(o, px){
+  return (o.italic?"italic ":"")+(o.bold?"700 ":"")+Math.max(1,px)+"px "+(o.font||"Arial");
+}
+// proportional to the Diagram's original fixed 8px/7px padding at a 14px box
+function textBoxPad(px){ return {x:px*8/14, y:px*7/14}; }
+/* maxWidthPx===null -> auto-width: one line per "\n", never wrapped, sized to the
+   longest line. Otherwise word-wraps to maxWidthPx (minus padding); a single word
+   longer than the box breaks by character instead of overflowing. */
+function layoutTextBox(ctx, o, px, maxWidthPx){
+  const prevFont=ctx.font;
+  ctx.font=textStyleFont(o,px);
+  const pad=textBoxPad(px);
+  const raw=o.text||"";
+  const lines=[];
+  if(maxWidthPx==null){
+    for(const para of raw.split("\n")) lines.push(para);
+  } else {
+    const maxw=Math.max(4, maxWidthPx-pad.x*2);
+    for(const para of raw.split("\n")){
+      let cur="";
+      for(const word of para.split(" ")){
+        if(ctx.measureText(word).width>maxw){
+          if(cur){ lines.push(cur); cur=""; }
+          let piece="";
+          for(const ch of word){
+            if(piece && ctx.measureText(piece+ch).width>maxw){ lines.push(piece); piece=ch; }
+            else piece+=ch;
+          }
+          cur=piece;
+          continue;
+        }
+        const test=cur?cur+" "+word:word;
+        if(cur && ctx.measureText(test).width>maxw){ lines.push(cur); cur=word; }
+        else cur=test;
+      }
+      lines.push(cur);
     }
-    out.push(cur);
   }
-  ctx.font=prev;
-  return out;
+  let width=0;
+  for(const ln of lines) width=Math.max(width, ctx.measureText(ln).width);
+  ctx.font=prevFont;
+  const lh=px*1.3;
+  return {lines, width:Math.max(1,width), height:Math.max(1,lines.length)*lh+pad.y*2};
 }
-function textHeight(o){
-  const lh=(o.size||14)*1.3;
-  const n=Math.max(1,textLines(o).length);
-  return Math.round(n*lh + 14); // 7px padding top + bottom
-}
-function drawText(o){
-  // height always conforms to the wrapped text; width is user-controlled
-  o.h = textHeight(o);
-  const lh=(o.size||14)*1.3;
-  const s=worldToScreen(o);
-  const w=o.w*cam.scale, h=o.h*cam.scale;
+function textLines(o){ return layoutTextBox(ctx,o,o.size||14,o.w==null?null:o.w).lines; }
+function textHeight(o){ return Math.round(layoutTextBox(ctx,o,o.size||14,o.w==null?null:o.w).height); }
+/* Paints background (if o.fill), border (if o.border) and lines at (x,y) in the
+   caller's screen space, and returns the rect actually used {x,y,w,h} — auto-width
+   boxes don't know their own width until this runs. Never draws selection chrome:
+   drawText replays through the SVG recorder for the PDF, and a handle baked into
+   that path would print. */
+function paintTextBox(ctx, o, x, y, px, maxWidthPx){
+  const lay=layoutTextBox(ctx,o,px,maxWidthPx);
+  const pad=textBoxPad(px);
+  const w = maxWidthPx==null ? lay.width+pad.x*2 : maxWidthPx;
+  const h = lay.height;
   ctx.save();
-  roundRect(ctx,s.x,s.y,w,h,6);
-  ctx.fillStyle=o.fill||"#ffffff";ctx.fill();
-  ctx.lineWidth=1.5;ctx.strokeStyle= sel.has(o.id)?"#2b7fd0":(o.stroke||"#c2cbd4");ctx.stroke();
+  if(o.fill || o.border){
+    roundRect(ctx,x,y,w,h,Math.max(2,px*6/14));
+    if(o.fill){ ctx.fillStyle=o.fill; ctx.fill(); }
+    if(o.border){ ctx.lineWidth=Math.max(1,px*1.5/14); ctx.strokeStyle=o.stroke||"#c2cbd4"; ctx.stroke(); }
+  }
   ctx.fillStyle=o.color||"#1b2530";
-  ctx.font=(o.size||14)*cam.scale+"px "+(o.font||"Arial");
-  ctx.textBaseline="top";
-  let yy=s.y+7*cam.scale;
-  for(const ln of textLines(o)){ ctx.fillText(ln, s.x+8*cam.scale, yy); yy+=lh*cam.scale; }
+  ctx.font=textStyleFont(o,px);
+  ctx.textBaseline="top"; ctx.textAlign="left";
+  let yy=y+pad.y;
+  const lh=px*1.3;
+  for(const ln of lay.lines){ ctx.fillText(ln, x+pad.x, yy); yy+=lh; }
   ctx.restore();
-  if(sel.has(o.id)){
-    // larger drag handle (rounded square) at the bottom-right for easy resizing
-    const hs=18, tx=s.x+w, ty=s.y+h;
+  return {x,y,w,h};
+}
+// scaling a fixed width by the size ratio keeps line breaks where they were (PDF Expert)
+function applyTextSizeChange(o, newSize){
+  newSize=Math.max(6,Math.min(200,Math.round(newSize)));
+  if(o.w!=null){ const old=+o.size||14; o.w=Math.max(60,o.w*(newSize/old)); }
+  o.size=newSize;
+}
+function drawTextHandles(rect){
+  const midY=rect.y+rect.h/2;
+  [rect.x, rect.x+rect.w].forEach(hx=>{
     ctx.save();
-    roundRect(ctx,tx-hs,ty-hs,hs,hs,4);
+    roundRect(ctx,hx-4,midY-10,8,20,3);
     ctx.fillStyle="#2b7fd0";ctx.fill();
     ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();
-    // grip lines
-    ctx.strokeStyle="rgba(255,255,255,.9)";ctx.lineWidth=1.5;
-    ctx.beginPath();ctx.moveTo(tx-hs+5,ty-3);ctx.lineTo(tx-3,ty-hs+5);ctx.moveTo(tx-hs+9,ty-3);ctx.lineTo(tx-3,ty-hs+9);ctx.stroke();
     ctx.restore();
+  });
+}
+function drawText(o){
+  const s=worldToScreen(o);
+  const px=(o.size||14)*cam.scale;
+  const maxW=(o.w==null)?null:o.w*cam.scale;
+  const rect=paintTextBox(ctx,o,s.x,s.y,px,maxW);
+  o.h=rect.h/cam.scale;   // height always conforms to the wrapped text; width is user-controlled
+  if(sel.has(o.id)){
+    ctx.save();
+    roundRect(ctx,rect.x,rect.y,rect.w,rect.h,6);
+    ctx.setLineDash([4,3]);ctx.lineWidth=1.5;ctx.strokeStyle="#2b7fd0";ctx.stroke();
+    ctx.restore();
+    drawTextHandles(rect);   // left/right width handles only — see textHandleHit
   }
-  addLabelBox("text",o.id,s.x,s.y,w,h);
+  addLabelBox("text",o.id,rect.x,rect.y,rect.w,rect.h);
 }
 
 function drawArrow(o){
@@ -2176,15 +2327,18 @@ function makeSvgCtx(){
     strokeRect(x,y,w,h){ ext(x,y,st.lineWidth); ext(x+w,y+h,st.lineWidth); out.push(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${strokeAttr()}/>`); },
     measureText(t){ meas.font=st.font; return meas.measureText(t); },
     fillText(t,x,y){
-      // font is always "[weight ]<size>px <family>" in this file
-      const m=/^\s*(?:(\S+)\s+)?([\d.]+)px\s+(.+)$/.exec(st.font)||[];
-      const size=+m[2]||10;
+      // font is "[italic ][weight ]<size>px <family>" in this file — an optional style
+      // token, then an optional weight token, then the size. Miss either and bold/italic
+      // text (the Text tool's B/I) silently prints plain.
+      const m=/^\s*(?:(italic)\s+)?(?:(\d+)\s+)?([\d.]+)px\s+(.+)$/.exec(st.font)||[];
+      const size=+m[3]||10;
       const anchor={center:"middle",right:"end",end:"end"}[st.textAlign]||"start";
       // explicit baseline offsets: dominant-baseline isn't dependable in WebKit's print path
       const yy=y+({middle:.35,top:.82,hanging:.82,bottom:-.22}[st.textBaseline]||0)*size;
       const w=c.measureText(t).width, x0=anchor==="middle"?x-w/2:anchor==="end"?x-w:x;
       ext(x0,y-size); ext(x0+w,y+size);
-      out.push(`<text x="${n(x)}" y="${n(yy)}" font-family="${xa(m[3]||"sans-serif")}" font-size="${n(size)}" font-weight="${xa(m[1]||"400")}" text-anchor="${anchor}" style="white-space:pre"${fillAttr()}>${xa(t)}</text>`);
+      const styleAttr=m[1]?` font-style="italic"`:"";
+      out.push(`<text x="${n(x)}" y="${n(yy)}" font-family="${xa(m[4]||"sans-serif")}" font-size="${n(size)}" font-weight="${xa(m[2]||"400")}"${styleAttr} text-anchor="${anchor}" style="white-space:pre"${fillAttr()}>${xa(t)}</text>`);
     },
     svgBody(){ return out.join(""); },
     extent(){ return box; }
@@ -2343,8 +2497,13 @@ function objBounds(o){
   }
   if(o.t==="arrow"){ const x=Math.min(o.x1,o.x2),y=Math.min(o.y1,o.y2);return {x,y,w:Math.abs(o.x2-o.x1),h:Math.abs(o.y2-o.y1)};}
   // o.h is only filled in by drawText — a job fitted before its first draw (PDF View right after
-  // Open) had h undefined, turning the whole print fit into NaN and dropping the diagram
-  if(o.t==="text"){ return {x:o.x,y:o.y,w:o.w,h:o.h||textHeight(o)}; }
+  // Open) had h undefined, turning the whole print fit into NaN and dropping the diagram.
+  // o.w can be legitimately null (auto-width), so it needs the same live fallback.
+  if(o.t==="text"){
+    if(o.w!=null && o.h!=null) return {x:o.x,y:o.y,w:o.w,h:o.h};
+    const lay=layoutTextBox(ctx,o,o.size||14,o.w);
+    return {x:o.x,y:o.y,w:o.w==null?lay.width+textBoxPad(o.size||14).x*2:o.w,h:o.h||lay.height};
+  }
   if(o.t==="ds"||o.t==="valley"||o.t==="splash"||o.t==="item"||o.t==="stamp"){ return {x:o.x-30,y:o.y-20,w:60,h:50}; }
   return {x:o.x||0,y:o.y||0,w:20,h:20};
 }
@@ -2475,7 +2634,7 @@ function toolHint(t){
     valley:"Tap an inside corner to place a Valley Shield (counts as 2 ft each)",
     splash:"Tap to drop a splash block • pick Plastic or Concrete above • change either any time via Select",
     custom:"Drag to draw the run, lift to finish • priced per foot • (mouse: click corners, then ✓ Finish)",
-    text:"Drag to draw a text box, then type",
+    text:"Tap for an auto-size box, or drag to set a width — then type. Tap an existing box to select it, tap again to edit.",
     arrow:"Drag to draw an arrow",
     stamp:"Pick a stamp above, then click to place it",
     hl:"Drag to highlight demo / labor / misc areas",
@@ -2700,6 +2859,74 @@ function updateOptbarFades(){
   wrap.classList.toggle("can-l", ob.scrollLeft>1);
   wrap.classList.toggle("can-r", ob.scrollLeft<max-1);
 }
+/* One style strip for both the Text tool's new-box defaults and a selected text box's
+   live values, reused verbatim by the Photos options cluster (Step 9 of the photo-markup
+   spec) — pass a plain {font,size,color,fill,bold,italic,border} object: either the tool's
+   remembered defaults or the selected box/mark itself, so one strip serves both roles. */
+function textStyleStripHTML(s){
+  const g=(t)=>'<div class="ob-grp">'+t+'</div>';
+  const font=s.font||"Arial", size=s.size||14, color=s.color||"#1b2530", fill=s.fill!=null?s.fill:null;
+  const bold=!!s.bold, italic=!!s.italic, border=s.border!==false;
+  return g('<label>Font</label><select id="opTFont">'+FONTS.map(f=>'<option'+(f===font?' selected':'')+' style="font-family:'+f+'">'+f+'</option>').join("")+'</select>')
+    + g('<button class="chip" id="opTSizeDn">−</button><input id="opTSize" type="number" min="6" max="200" value="'+size+'" style="width:50px;text-align:center"><button class="chip" id="opTSizeUp">+</button>')
+    + g('<button class="chip'+(bold?' on':'')+'" id="opTBold"><b>B</b></button><button class="chip'+(italic?' on':'')+'" id="opTItalic"><i>I</i></button>')
+    + g('<label>Text</label><span class="swatch" id="opTColSw" style="background:'+color+'"></span><button class="chip" id="opTCol">Color…</button>')
+    + g('<label>Fill</label><span class="swatch" id="opTFillSw" style="background:'+(fill||"#fff")+(fill?'':';opacity:.35')+'"></span><button class="chip" id="opTFill">Color…</button><button class="chip'+(!fill?' on':'')+'" id="opTFillNone">None</button>')
+    + g('<button class="chip'+(border?' on':'')+'" id="opTBorder">Border</button>');
+}
+// resolves what the strip is currently editing: the one selected text box (any tool — a tap
+// with the Text tool now selects an existing box instead of jumping straight to editing it),
+// else the Text tool's own defaults, else nothing to wire
+function textStripTarget(){
+  const o=sel.size===1?objById([...sel][0]):null;
+  if(o&&o.t==="text") return o;
+  return tool==="text" ? "defaults" : null;
+}
+function textStripPatch(target,patch,commit){
+  if(target==="defaults"){
+    if("font" in patch) textFont=patch.font;
+    if("size" in patch) textSize=patch.size;
+    if("color" in patch) textColor=patch.color;
+    if("fill" in patch) textFill=patch.fill;
+    if("bold" in patch) textBold=patch.bold;
+    if("italic" in patch) textItalic=patch.italic;
+    if("border" in patch) textBorder=patch.border;
+    if(commit) buildOptbar();
+  } else {
+    if(commit) recordHistory();
+    if("size" in patch) applyTextSizeChange(target,patch.size); else Object.assign(target,patch);
+    // the box is open in the floating editor right now — keep its textarea in sync live
+    if(editing && editing.kind==="text" && editing.objId===target.id){
+      const inp=FE.querySelector("textarea");
+      if(inp){
+        inp.style.fontWeight=target.bold?"700":"400";
+        inp.style.fontStyle=target.italic?"italic":"normal";
+        inp.style.color=target.color||"#1b2530";
+        inp.style.background=target.fill||"#fff";
+        inp.style.fontSize=Math.max(11,Math.round((target.size||14)*cam.scale))+"px";
+      }
+    }
+    if(commit){ refreshAll(); buildOptbar(); } else draw();
+  }
+}
+function wireTextStyleStrip(){
+  const target=textStripTarget(); if(!target) return;
+  const g2=id=>document.getElementById(id);
+  if(g2("opTFont")) g2("opTFont").onchange=e=>textStripPatch(target,{font:e.target.value},true);
+  if(g2("opTSize")){
+    g2("opTSize").oninput =e=>textStripPatch(target,{size:+e.target.value||14},false);
+    g2("opTSize").onchange=e=>textStripPatch(target,{size:+e.target.value||14},true);
+  }
+  const curSize=()=> target==="defaults"?textSize:(target.size||14);
+  if(g2("opTSizeDn")) g2("opTSizeDn").onclick=()=>textStripPatch(target,{size:Math.max(6,curSize()-2)},true);
+  if(g2("opTSizeUp")) g2("opTSizeUp").onclick=()=>textStripPatch(target,{size:Math.min(200,curSize()+2)},true);
+  if(g2("opTBold")) g2("opTBold").onclick=()=>textStripPatch(target,{bold:!(target==="defaults"?textBold:target.bold)},true);
+  if(g2("opTItalic")) g2("opTItalic").onclick=()=>textStripPatch(target,{italic:!(target==="defaults"?textItalic:target.italic)},true);
+  if(g2("opTBorder")) g2("opTBorder").onclick=()=>textStripPatch(target,{border:!(target==="defaults"?textBorder:(target.border!==false))},true);
+  if(g2("opTCol")) g2("opTCol").onclick=()=>pickColor("Text color",target==="defaults"?textColor:target.color,c=>textStripPatch(target,{color:c},true));
+  if(g2("opTFill")) g2("opTFill").onclick=()=>pickColor("Background color",(target==="defaults"?textFill:target.fill)||"#ffffff",c=>textStripPatch(target,{fill:c},true));
+  if(g2("opTFillNone")) g2("opTFillNone").onclick=()=>textStripPatch(target,{fill:null},true);
+}
 function buildOptbar(){
   const ob=document.getElementById("optbar");
   const g=(t)=>'<div class="ob-grp">'+t+'</div>';
@@ -2753,11 +2980,12 @@ function buildOptbar(){
         + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap</label>');
     }
   } else if(tool==="text"){
-    h+='<span class="ob-title">TEXT</span>'+dv
-      + g('<label>Font</label><select id="opFont">'+FONTS.map(f=>'<option'+(f===P.settings.defaultFont?' selected':'')+' style="font-family:'+f+'">'+f+'</option>').join("")+'</select>')
-      + g('<label>Size</label><input id="opTSize" type="number" min="8" max="60" value="14" style="width:56px">')
-      + g('<label>Box</label><span class="swatch" id="opTFillSw" style="background:#fff"></span><button class="chip" id="opTFill">Fill…</button>')
-      + g('<label>Text</label><span class="swatch" id="opTColSw" style="background:#1b2530"></span><button class="chip" id="opTCol">Color…</button>');
+    // a tap with the Text tool selects an existing box rather than editing it immediately, so
+    // the strip must reflect that selection when there is one, not just the tool's defaults
+    const selOne = sel.size===1?objById([...sel][0]):null;
+    const ts = (selOne&&selOne.t==="text") ? selOne
+      : {font:textFont,size:textSize,color:textColor,fill:textFill,bold:textBold,italic:textItalic,border:textBorder};
+    h+='<span class="ob-title">TEXT</span>'+dv+textStyleStripHTML(ts);
   } else if(tool==="arrow"){
     h+='<span class="ob-title">ARROW</span>'+dv
       + g('<label>Color</label><input type="color" id="opArrColor" value="#c8202a" style="width:40px;height:28px;border:0;background:none">')
@@ -2826,6 +3054,8 @@ function buildOptbar(){
       h+= g('<label>Material</label><select id="opSelSplashMat">'
           +'<option value="plastic"'+(mat==="plastic"?' selected':'')+'>Plastic — '+money(+P.settings.prices.splashPlastic||0)+'</option>'
           +'<option value="concrete"'+(mat==="concrete"?' selected':'')+'>Concrete — '+money(+P.settings.prices.splashConcrete||0)+'</option></select>') + dv;
+    } else if(one && one.t==="text"){
+      h+= textStyleStripHTML(one) + dv;
     } else {
       h+='<span class="mini" style="color:var(--text-soft)">'+(sel.size>1?sel.size+' selected':'Click to edit a measurement or note • drag to move')+'</span>' + dv;
     }
@@ -2884,10 +3114,7 @@ function wireOptbar(){
   if(byId("opDsShowSize")) byId("opDsShowSize").onchange=e=>{ P.settings.showDsSize=e.target.checked; buildOptbar(); refreshAll(); };
   if(byId("opSplashMat")) byId("opSplashMat").onchange=e=>{ splashDrawMaterial=e.target.value; };
   if(byId("opSelSplashMat")) byId("opSelSplashMat").onchange=e=>{ const one=sel.size===1?objById([...sel][0]):null; if(one&&one.t==="splash"){ one.material=e.target.value; refreshAll(); } };
-  if(byId("opFont")) byId("opFont").onchange=e=>textFont=e.target.value;
-  if(byId("opTSize")) byId("opTSize").onchange=e=>textSize=+e.target.value;
-  if(byId("opTFill")) byId("opTFill").onclick=()=>pickColor("Box fill color",textFill,c=>{textFill=c;byId("opTFillSw").style.background=c;});
-  if(byId("opTCol")) byId("opTCol").onclick=()=>pickColor("Text color",textColor,c=>{textColor=c;byId("opTColSw").style.background=c;});
+  wireTextStyleStrip();
   if(byId("opArrColor")) byId("opArrColor").oninput=e=>arrowColor=e.target.value;
   if(byId("opArrW")) byId("opArrW").oninput=e=>arrowWidth=+e.target.value;
   if(byId("opStamp")) byId("opStamp").onchange=e=>{ activeStamp=stampPresets[+e.target.value]; byId("opStampSw").style.background=activeStamp.color; };
@@ -2935,6 +3162,7 @@ function wireOptbar(){
 let gutterDrawSize=null, gutterDrawColor=null, dsDrawSize=null, dsDrawColor=null;
 let splashDrawMaterial="plastic";   // default splash-block material for the Splash tool
 let textFont="Arial", textSize=14, textFill="#ffffff", textColor="#1b2530";
+let textBold=false, textItalic=false, textBorder=true;
 let arrowColor="#c8202a", arrowWidth=3;
 
 /* ============================================================ */
@@ -2982,15 +3210,23 @@ function updateUndoButtons(){
   rids.forEach(id=>{ const r=document.getElementById(id); if(r) r.disabled=hidx>=history.length-1; });
 }
 function restore(s){
+  // ids on every photo mark (ensurePhotoMarks) are what let the selection survive this
+  // clone: capture which ids were selected before the swap, re-resolve after.
+  const selIds = (typeof photoSelIds==="function") ? photoSelIds() : null;
   P.objects=JSON.parse(JSON.stringify(s.objects));P.settings=JSON.parse(JSON.stringify(s.settings));
-  P.meta=JSON.parse(JSON.stringify(s.meta));
+  // signatures aren't in undo (they're placed on the native PDF, not drawn here): carry them
+  // across, or undoing any diagram edit would silently un-sign the estimate
+  const sigs=P.meta.signatures;
+  P.meta=JSON.parse(JSON.stringify(s.meta)); P.meta.signatures=sigs||[];
   if(s.photos) P.photos=JSON.parse(JSON.stringify(s.photos));
   // snapshots taken before notes/terms existed have no pres — fall back to defaults
   P.pres=ensurePres(s.pres?JSON.parse(JSON.stringify(s.pres)):null);
   nextId=s.nextId; sel.clear();
-  if(typeof photoSelMarks!=="undefined" && photoSelMarks) photoSelMarks.clear();
+  if(typeof photoSelMarks!=="undefined" && photoSelMarks){
+    photoSelMarks = selIds ? resolvePhotoSel(selIds) : new Set();
+  }
   refreshAll();
-  if(curPage==="photos"){ if(typeof cancelPhotoLine==="function") cancelPhotoLine(); renderPhotos(); if(typeof updatePhotoSelBar==="function") updatePhotoSelBar(); }
+  if(curPage==="photos"){ if(typeof cancelPhotoLine==="function") cancelPhotoLine(); renderPhotos(); if(typeof updatePhotoSelBar==="function") updatePhotoSelBar(); if(typeof buildPhotoOptbar==="function") buildPhotoOptbar(); }
   updateUndoButtons();
 }
 function undo(){ if(hidx>0){hidx--;restore(history[hidx]);} }
@@ -3094,7 +3330,10 @@ function buildOptionsBar(){
 /* ============================================================ */
 /* HIT TESTING                                                  */
 /* ============================================================ */
-const EDITABLE=new Set(["seglen","dsnote","text","stamp"]);
+// "text" is deliberately absent: a text box's first tap now selects (matching PDF Expert
+// and making restyling possible), and a second tap on an already-selected box edits it.
+// seglen/dsnote/stamp stay single-tap — see the tap dispatch in onUp.
+const EDITABLE=new Set(["seglen","dsnote","stamp"]);
 function hitTest(pt){
   // 1) editable / object label boxes (topmost last drawn -> iterate reverse)
   for(let i=labelBoxes.length-1;i>=0;i--){
@@ -3163,13 +3402,16 @@ function moveWeldedVertices(run, oldP, newP){
     }
   }
 }
-/* text resize handle (bottom-right) */
+/* text width handles — left/right only, at the vertical mid of the last-drawn box
+   (drawTextHandles). Height is never a handle; it always follows the content. */
 function textHandleHit(pt){
   if(sel.size!==1) return null;
   const o=objById([...sel][0]); if(!o||o.t!=="text") return null;
-  const br=worldToScreen({x:o.x+o.w,y:o.y+o.h});
+  const lb=findLabel("text",o.id); if(!lb) return null;
   const tol = lastPtrType==="touch" ? 26 : 16;   // bigger grab area = easier to resize
-  if(Math.hypot(pt.x-br.x,pt.y-br.y)<tol) return o;
+  const midY=lb.y+lb.h/2;
+  if(Math.hypot(pt.x-lb.x,pt.y-midY)<tol) return {o,side:"left",lb};
+  if(Math.hypot(pt.x-(lb.x+lb.w),pt.y-midY)<tol) return {o,side:"right",lb};
   return null;
 }
 
@@ -3292,7 +3534,11 @@ function onDown(e){
     // priority: arrow/text handles, then vertex handles of an already-selected run,
     // then any line/object body (drag = move whole run), then empty space = marquee.
     const ah=arrowHandleHit(pt); if(ah){ arrowDrag={o:ah.o,end:ah.end}; return; }
-    const th=textHandleHit(pt); if(th){ textResize={o:th,w0:th.w,h0:th.h,pt}; return; }
+    const th=textHandleHit(pt);
+    if(th){
+      textResize={o:th.o,side:th.side,w0:(th.o.w==null?th.lb.w/cam.scale:th.o.w),x0:th.o.x,startW:screenToWorld(pt)};
+      return;
+    }
     const gv=gutterVertexHit(pt); if(gv){ vertexDrag={o:gv.o,idx:gv.idx,oldPos:{x:gv.o.pts[gv.idx].x,y:gv.o.pts[gv.idx].y}}; return; }
     const hit=hitTest(pt);
     if(hit){
@@ -3318,7 +3564,11 @@ function onDown(e){
         moveIds.add(hit.objId);
         const ids=[...moveIds];                       // keep real id values (numbers)
         const clones={}; ids.forEach(id=>{ const ob=objById(id); if(ob) clones[id]=JSON.parse(JSON.stringify(ob)); });
-        press={pt,mode:"maybeMove",hit,ids,clones,moved:false};
+        // a text box's first tap selects; a tap on the box that was ALREADY the sole
+        // selection edits it instead (PDF Expert). Capture that "was it already selected"
+        // state before this tap's own selection logic runs in onUp.
+        const wasSelectedText = hit.kind==="text" && sel.size===1 && sel.has(hit.objId) && !e.shiftKey;
+        press={pt,mode:"maybeMove",hit,ids,clones,moved:false,wasSelectedText};
       }
     }else{
       if(!e.shiftKey){ sel.clear(); segSel.clear(); }
@@ -3367,7 +3617,17 @@ function onDown(e){
     placeTapObject(tool, cursorW); return;
   }
   if(tool==="arrow"){ drawing={t:"arrow",start:w}; return; }
-  if(tool==="text"){ drawing={t:"text",start:w}; return; }
+  if(tool==="text"){
+    // Tapping an existing box with the Text tool selects it, same as Select's first tap — a
+    // second tap on the box that's already the sole selection opens the editor. The decision
+    // is made in onUp (not here): openEditorFor() must run on pointer-up, like every other
+    // text edit, or the click's own mouseup/blur closes the editor the instant it opens.
+    const hit=hitTest(pt);
+    const existingHit=(hit&&hit.kind==="text")?hit:null;
+    const wasSole = existingHit && sel.size===1 && sel.has(existingHit.objId) && !e.shiftKey;
+    drawing={t:"text",start:w,existingHit,wasSole,shiftKey:e.shiftKey};
+    return;
+  }
   if(tool==="hl"){ drawing={t:"hl",pts:[w]}; return; }
   if((tool==="demo"||tool==="screen") && eraseModeActive()){
     recordHistory(); erasing=tool; cursorW=w;
@@ -3448,7 +3708,17 @@ function onMove(e){
     }
     draw(); return;
   }
-  if(textResize){ const o=textResize.o; o.w=Math.max(60,textResize.w0+(pt.x-textResize.pt.x)/cam.scale); draw(); return; }
+  if(textResize){
+    const o=textResize.o;
+    const dx=w.x-textResize.startW.x;
+    if(textResize.side==="right"){ o.w=Math.max(60,textResize.w0+dx); }
+    else {
+      const neww=Math.max(60,textResize.w0-dx);
+      o.x=textResize.x0+(textResize.w0-neww);
+      o.w=neww;
+    }
+    draw(); return;
+  }
 
   if(press){
     const dx=pt.x-press.pt.x, dy=pt.y-press.pt.y;
@@ -3509,11 +3779,13 @@ function onUp(e){
       if(!press.moved){
         // click: edit label, select a single segment, or select an object
         if(press.hit && EDITABLE.has(press.hit.kind)){ openEditorFor(press.hit); }
+        else if(press.hit && press.hit.kind==="text" && press.wasSelectedText){ openEditorFor(press.hit); }
         else if(press.hit){
           if(!e.shiftKey){ sel.clear(); segSel.clear(); }
           if(e.shiftKey && sel.has(press.hit.objId)) sel.delete(press.hit.objId); else sel.add(press.hit.objId);
           const so=objById(press.hit.objId);
           if(so && (so.t==="gutter"||so.t==="custom")) setHint("Run selected — drag the line to move it • drag a blue dot to move a corner.");
+          else if(so && so.t==="text") setHint("Text box selected — drag the body to move it, a side handle to set its width • tap it again to edit.");
         }
       } else { recordHistory(); }
     } else if(press.mode==="moveLabel"){
@@ -3570,13 +3842,36 @@ function onUp(e){
         P.objects.push(o); sel=new Set([o.id]); refreshAll(); }
       drawing=null;
     } else if(drawing.t==="text"){
-      const x=Math.min(drawing.start.x,w.x),y=Math.min(drawing.start.y,w.y);
-      const ww=Math.max(60,Math.abs(w.x-drawing.start.x)),hh=Math.max(30,Math.abs(w.y-drawing.start.y));
-      recordHistory();
-      const o={t:"text",id:uid(),x,y,w:ww,h:hh,text:"",fill:textFill,color:textColor,font:textFont,size:textSize,stroke:"#c2cbd4"};
-      P.objects.push(o); sel=new Set([o.id]); drawing=null; refreshAll();
-      // open the editor synchronously (still inside the pointer-up gesture) so iOS shows the keyboard
-      openEditorFor({objId:o.id,kind:"text"});
+      const start=drawing.start, existingHit=drawing.existingHit, wasSole=drawing.wasSole, shiftKey=drawing.shiftKey;
+      const dragDist=dist(start,w);
+      drawing=null;
+      if(existingHit && dragDist<=5){
+        if(wasSole){ openEditorFor(existingHit); }
+        else {
+          if(!shiftKey){ sel.clear(); segSel.clear(); }
+          sel.add(existingHit.objId);
+          refreshAll();
+        }
+      } else if(dragDist<=5){
+        // tap on empty space: an auto-width box (w:null), sized to the text as you type
+        recordHistory();
+        const o={t:"text",id:uid(),x:start.x,y:start.y,w:null,h:30,text:"",
+                 fill:textFill,color:textColor,font:textFont,size:textSize,stroke:"#c2cbd4",
+                 bold:textBold,italic:textItalic,border:textBorder};
+        P.objects.push(o); sel=new Set([o.id]); refreshAll();
+        openEditorFor({objId:o.id,kind:"text"});
+      } else {
+        // drag: a fixed-width box (the Diagram's existing 60px-minimum drag-to-set-width)
+        const x=Math.min(start.x,w.x),y=Math.min(start.y,w.y);
+        const ww=Math.max(60,Math.abs(w.x-start.x));
+        recordHistory();
+        const o={t:"text",id:uid(),x,y,w:ww,h:30,text:"",
+                 fill:textFill,color:textColor,font:textFont,size:textSize,stroke:"#c2cbd4",
+                 bold:textBold,italic:textItalic,border:textBorder};
+        P.objects.push(o); sel=new Set([o.id]); refreshAll();
+        // open the editor synchronously (still inside the pointer-up gesture) so iOS shows the keyboard
+        openEditorFor({objId:o.id,kind:"text"});
+      }
     } else if(drawing.t==="hl"){
       if(drawing.pts.length>1){ recordHistory();
         const o={t:"hl",id:uid(),pts:drawing.pts.slice(),color:hlColor,width:hlWidth};
@@ -3609,6 +3904,7 @@ function onDbl(e){
     const hit=hitTest(evtPos(e));
     if(!hit) return;
     const o=objById(hit.objId); if(!o) return;
+    if(hit.kind==="text"){ openEditorFor(hit); return; }
     let cleared=false;
     if(hit.kind==="dsnote" && o.noteOff){ o.noteOff=null; cleared=true; }
     else if(hit.kind==="dssize" && o.sizeOff){ o.sizeOff=null; cleared=true; }
@@ -3882,7 +4178,10 @@ function commitEditor(){
       o.notation = val;
     } else if(editing.kind==="text"){
       if((o.text||"")!==val) recordHistory();
-      o.text = val;
+      if(val.trim()===""){    // empty text deletes the box, new or existing (matches the photo page)
+        const i=P.objects.indexOf(o); if(i>=0) P.objects.splice(i,1);
+        sel.delete(o.id);
+      } else o.text = val;
     } else if(editing.kind==="stamp"){
       const nv=(val||"").toUpperCase();
       if((o.text||"")!==nv) recordHistory();
@@ -3927,9 +4226,15 @@ function openEditorFor(hit){
   } else { // text
     field=document.createElement("textarea");
     field.value=o.text||""; field.rows=Math.max(2,Math.round(o.h/22));
-    field.style.width=Math.max(120,lb.w-2)+"px";
+    // wide enough to type comfortably even on a brand-new, empty auto-width box (lb.w~0 then)
+    field.style.width=Math.max(160,lb.w+40)+"px";
+    const px=Math.max(11,Math.round((o.size||14)*cam.scale));
     field.style.fontFamily=(o.font||"Arial");
-    field.style.fontWeight="400";
+    field.style.fontSize=px+"px";
+    field.style.fontWeight=o.bold?"700":"400";
+    field.style.fontStyle=o.italic?"italic":"normal";
+    field.style.color=o.color||"#1b2530";
+    field.style.background=o.fill||"#fff";
     hintTxt="Enter for new line — ✓ Done to finish";
   }
   FE.appendChild(field);
@@ -4026,7 +4331,10 @@ function openEditorFor(hit){
       }
     } else if(ev.key==="Escape"){
       ev.preventDefault();
-      FE.style.display="none"; FE.innerHTML=""; editing=null; draw();
+      // text commits on Escape (and deselects, via commitEditor -> refreshAll); every
+      // other field discards, e.g. a bad in-progress seglen number
+      if(hit.kind==="text"){ commitEditor(); sel.delete(hit.objId); draw(); }
+      else { FE.style.display="none"; FE.innerHTML=""; editing=null; draw(); }
     }
   };
   // dsnote uses an explicit ✓ Done button, so don't auto-commit when the field loses focus
@@ -4565,7 +4873,10 @@ byId("btnSettings").onclick=openSettings;
 /* PAGE SWITCH  (Diagram / Photos / PDF View)                 */
 /* ============================================================ */
 let curPage="diagram";
-let pdfRailWasHidden=false;   // rail state to put back when leaving PDF View
+/* The rail is the Diagram page's. Photos and PDF View are full-bleed, and a takeoff
+   worksheet stranded beside a photo grid just steals width from the photos, so both
+   auto-hide it and the rep's own choice is put back on the way back to Diagram. */
+let railWasHidden=false;
 function setPage(pg){
   const prev=curPage;
   curPage=pg;
@@ -4573,15 +4884,20 @@ function setPage(pg){
   byId("tabPhotos").classList.toggle("active",pg==="photos");
   byId("tabPdf").classList.toggle("active",pg==="pdf");
   const ps=byId("photoStage"), fs=byId("pdfStage");
-  if(pg==="photos"){ ps.style.display="flex"; ps.style.zIndex="30"; renderPhotos(); if(typeof updateUndoButtons==="function") updateUndoButtons(); }
+  // The rail moves FIRST: #photoStage lives inside #stage, so parking the rail widens the
+  // photo pane, and renderPhotos() below then measures the width the cards will really get.
+  // Leaving Diagram parks it; coming back restores it. Only those two edges touch it, so
+  // hopping Photos -> PDF -> Photos never loses the rep's original choice.
+  if(pg!=="diagram" && prev==="diagram"){ railWasHidden=railHidden; setRailHidden(true); }
+  else if(pg==="diagram" && prev!=="diagram"){ setRailHidden(railWasHidden); }
+  else if(pg!=="photos") resize();   // setRailHidden already re-measures when it fires
+  if(pg==="photos"){ ps.style.display="flex"; ps.style.zIndex="30"; renderPhotos(); if(typeof updateUndoButtons==="function") updateUndoButtons(); if(typeof buildPhotoOptbar==="function") buildPhotoOptbar(); }
   else { if(typeof cancelPhotoLine==="function") cancelPhotoLine(); ps.style.display="none"; }
-  if(prev==="pdf" && pg!=="pdf"){ pdfNative({action:"hide"}); setRailHidden(pdfRailWasHidden); }
+  if(prev==="pdf" && pg!=="pdf") pdfNative({action:"hide"});
   if(pg==="pdf"){
     fs.style.display="flex"; fs.style.zIndex="30";
-    if(prev!=="pdf"){ pdfRailWasHidden=railHidden; setRailHidden(true); }
     refreshPdfView();
   } else fs.style.display="none";
-  if(pg!=="photos") resize();
   if(typeof updatePhotoSelBar==="function") updatePhotoSelBar();
 }
 byId("tabDiagram").onclick=()=>setPage("diagram");
@@ -4652,11 +4968,43 @@ function idbGC(){
 /* ============================================================ */
 /* PHOTO MARKUP PAGE                                           */
 /* ============================================================ */
-let photoPen={color:"#e01b24",width:7};
-let photoTextSize=32;          // pt for the next callout; A−/A+ changes it
-let photoTool="pen";   // select | pen | line | text
-let photoLine=null;    // {ph, mark, redraw} in-progress polyline
+/* Mark schema — P.photos[i].strokes[], normalized 0..1 image coords:
+     {type:"pen"|"highlight",                    id, color, width, opacity, pts}
+     {type:"line",                                id, color, width, opacity, dash, pts}
+     {type:"rect"|"ellipse"|"polygon",            id, color, width, opacity, fill, dash, pts}
+     {type:"arrow",                                id, color, width, opacity, heads, dash, pts:[tail,head]}
+     {type:"text", id, opacity, x, y, w, text, font, size, bold, italic, color, fill, border, tip?}
+   rect/ellipse store the two drag corners in pts (unsorted — paintPhotoMark normalizes
+   min/max); polygon is a closed ring; a callout is a text mark with `tip` (the point its
+   leader points at). Every mark has an id (ensurePhotoMarks back-fills legacy saves) so
+   photoSelMarks can survive undo/redo by re-resolving ids after restore()'s deep clone,
+   instead of clearing on every undo. */
+const PHOTO_PALETTE_DEFAULT=["#e01b24","#ff9f0a","#ffd60a","#30d158","#0a84ff"];
+function photoPalette(){
+  const m=P.meta;
+  if(!m.photoPalette || !Array.isArray(m.photoPalette.colors) || m.photoPalette.colors.length!==5){
+    m.photoPalette={colors:PHOTO_PALETTE_DEFAULT.slice(), recent:null};
+  }
+  return m.photoPalette;
+}
+// per-tool remembered style (PDF Expert: the highlighter doesn't clobber the pen's width/opacity)
+let photoToolStyle={
+  pen:      {color:"#e01b24", width:7,  opacity:1},
+  highlight:{color:"#ffd60a", width:22, opacity:.38},
+  line:     {color:"#e01b24", width:5,  opacity:1, dash:false},
+  rect:     {color:"#e01b24", width:5,  opacity:1, dash:false, fill:null},
+  ellipse:  {color:"#e01b24", width:5,  opacity:1, dash:false, fill:null},
+  polygon:  {color:"#e01b24", width:5,  opacity:1, dash:false, fill:null},
+  arrow:    {color:"#e01b24", width:5,  opacity:1, dash:false, heads:1},
+  eraser:   {size:28}
+};
+// text + callout share the Diagram's text-box engine and their own remembered style
+let photoTextStyle={font:"Arial", size:32, bold:true, italic:false, color:"#e01b24",
+                     fill:"rgba(255,255,255,.82)", border:true};
+let photoTool="pen";        // select|pen|highlight|line|rect|ellipse|arrow|polygon|text|callout|eraser
+let photoLine=null;         // {ph, mark, redraw, closed} in-progress polyline/polygon
 let photoSelMarks=new Set();  // selected mark references (current photo)
+let photoOptbarKey="";      // what #photoOptbar last showed — up here because setPhotoTool("pen") builds it during load
 /* Redrawing a card in place, instead of rebuilding the page, is what stops the
    flashing: renderPhotos() blows away every canvas and starts a fresh image
    decode, so each card renders empty for a frame or two before the photo
@@ -4665,130 +5013,280 @@ let photoSelMarks=new Set();  // selected mark references (current photo)
    cards actually changes. */
 const photoRedraws=new Map();   // photo id -> that card's redraw fn
 const photoImgCache=new Map();  // photo id -> decoded Image, reused across rebuilds
+const photoCardInfo=new Map();  // photo id -> {cv,V,cw,chh} — lets the selBar reach a card's editor
 function redrawAllPhotos(){ photoRedraws.forEach(fn=>{ try{ fn(); }catch(e){} }); }
-// live preview while dragging, single history entry + save on release
-byId("photoColor").oninput =e=>{ photoPen.color=e.target.value; applyPhotoColorToSelection(false); };
-byId("photoColor").onchange=e=>{ photoPen.color=e.target.value; applyPhotoColorToSelection(true); };
-byId("photoWidth").oninput =e=>{ photoPen.width=+e.target.value; applyPhotoWidthToSelection(false); };
-byId("photoWidth").onchange=e=>{ photoPen.width=+e.target.value; applyPhotoWidthToSelection(true); };
 if(byId("photoUndo")) byId("photoUndo").onclick=()=>undo();
 if(byId("photoRedo")) byId("photoRedo").onclick=()=>redo();
-/* `commit` is false while the control is still being dragged (oninput) and true
-   when the user lets go (onchange). Recording history on every input event piled
-   up one undo step per slider pixel and swamped the 80-entry history. */
-function applyPhotoColorToSelection(commit){
-  if(photoTool==="select" && photoSelMarks.size){
-    photoSelMarks.forEach(m=>{ m.color=photoPen.color; });
-    if(commit){ recordHistory(); saveLocal(); }
-    redrawAllPhotos();
-  }
-}
-function applyPhotoWidthToSelection(commit){
-  if(photoTool==="select" && photoSelMarks.size){
-    let any=false;
-    photoSelMarks.forEach(m=>{ if((m.type||"pen")!=="text"){ m.width=photoPen.width; any=true; } });
-    if(any){
-      if(commit){ recordHistory(); saveLocal(); }
-      redrawAllPhotos();
+
+// follows ensurePres()'s rebuild-not-patch spirit: after this runs no reader needs a ||
+// fallback. Migrates legacy text (prompt()-authored, always bold, white plate) to the
+// shared text-box fields so it renders exactly as it did before this feature.
+function ensurePhotoMarks(ph){
+  if(!ph.strokes) ph.strokes=[];
+  ph.strokes.forEach(m=>{
+    if(!m.type) m.type="pen";
+    if(m.id==null) m.id=uid();
+    if(m.opacity==null) m.opacity=1;
+    if(m.type==="text" && m.w===undefined){
+      m.w=null; m.font=m.font||"Arial"; m.bold=true; m.italic=false;
+      m.fill = m.fill===undefined ? "rgba(255,255,255,.82)" : m.fill;
+      m.border=true;
     }
-  }
+  });
 }
-// hit-test a vertex of a selected pen/line mark; returns {mark,idx} or null
-function photoVertexHit(ph,p,cw,chh,scale,ptrType){
-  // thr is a screen-px radius (matches the constant-size handle drawn at 5/V.s),
-  // so it has to shrink by the zoom scale here rather than staying flat — a flat
-  // px threshold in image space ballooned into a huge screen-space grab area
-  // once you zoomed in, which is how a nearby point kept stealing the drag.
-  const thr=(ptrType==="touch"?16:10)/(scale||1);
-  let best=null, bestD=Infinity;
-  for(const m of ph.strokes){
-    if(!photoSelMarks.has(m)) continue;
-    if((m.type||"pen")==="text" || !m.pts) continue;
-    for(let i=0;i<m.pts.length;i++){
-      const dx=(m.pts[i].x-p.x)*cw, dy=(m.pts[i].y-p.y)*chh;
-      const d=Math.hypot(dx,dy);
-      // closest point wins, not first-found — with two vertices inside the
-      // threshold (a short segment, or points from two selected marks
-      // overlapping) this used to always grab whichever came first in
-      // ph.strokes instead of the one actually under the cursor.
-      if(d<=thr && d<bestD){ best={mark:m,idx:i}; bestD=d; }
+function photoOf(mark){ return (P.photos||[]).find(ph=>(ph.strokes||[]).includes(mark)) || null; }
+// selection-by-id: restore() deep-clones P for undo/redo, which kills the old object
+// references photoSelMarks held — re-resolve by id afterward instead of clearing.
+function photoSelIds(){ return new Set([...photoSelMarks].map(m=>m.id)); }
+function resolvePhotoSel(ids){
+  const found=new Set();
+  if(ids && ids.size) for(const ph of P.photos||[]) for(const m of ph.strokes||[]) if(ids.has(m.id)) found.add(m);
+  return found;
+}
+
+// generalizes applyPhotoColorToSelection/applyPhotoWidthToSelection into one entry point
+// per Step 5 — width/fill/heads/dash are skipped on marks that don't have them.
+function applyPhotoStyleToSelection(patch, commit){
+  if(!photoSelMarks.size) return;
+  let any=false;
+  photoSelMarks.forEach(m=>{
+    const type=m.type||"pen";
+    for(const k in patch){
+      if(k==="width" && type==="text") continue;
+      if(k==="fill" && !["rect","ellipse","polygon"].includes(type)) continue;
+      if(k==="heads" && type!=="arrow") continue;
+      if(k==="dash" && !["line","rect","ellipse","polygon","arrow"].includes(type)) continue;
+      m[k]=patch[k]; any=true;
     }
-  }
-  return best;
+  });
+  if(!any) return;
+  if(commit){ recordHistory(); saveLocal(); }
+  redrawAllPhotos();
 }
-function clearPhotoSel(){ if(photoSelMarks.size){ photoSelMarks.clear(); redrawAllPhotos(); } updatePhotoSelBar(); }
+function clearPhotoSel(){ if(photoSelMarks.size){ photoSelMarks.clear(); redrawAllPhotos(); } updatePhotoSelBar(); buildPhotoOptbar(); }
 function deletePhotoSelection(){
   if(!photoSelMarks.size) return;
   recordHistory();
   for(const ph of P.photos){ ph.strokes=(ph.strokes||[]).filter(m=>!photoSelMarks.has(m)); }
-  photoSelMarks.clear(); redrawAllPhotos(); saveLocal(); updatePhotoSelBar();
+  photoSelMarks.clear(); redrawAllPhotos(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar();
 }
-/* ---- selected-mark actions (edit / resize / delete) ---- */
-function selectedPhotoTexts(){ return [...photoSelMarks].filter(m=>(m.type||"pen")==="text"); }
-function editPhotoText(m){
-  if(!m || (m.type||"pen")!=="text") return;
-  const t=prompt("Edit callout text:", m.text||"");
-  if(t==null) return;
+
+/* ---- selBar object actions: duplicate / front-back / flip / align ---- */
+function duplicatePhotoSelection(){
+  if(!photoSelMarks.size) return;
   recordHistory();
-  if(t.trim()===""){                              // emptying it removes the callout
-    for(const ph of P.photos) ph.strokes=(ph.strokes||[]).filter(x=>x!==m);
-    photoSelMarks.delete(m);
-  } else m.text=t.trim();
+  const copies=new Set();
+  photoSelMarks.forEach(m=>{
+    const ph=photoOf(m); if(!ph) return;
+    const c=JSON.parse(JSON.stringify(m)); c.id=uid();
+    translateMarkN(c,0.02,0.02);
+    ph.strokes.push(c); copies.add(c);
+  });
+  photoSelMarks=copies; redrawAllPhotos(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar();
+}
+function movePhotoSelectionZ(toFront){
+  if(!photoSelMarks.size) return;
+  recordHistory();
+  const byPhoto=new Map();
+  photoSelMarks.forEach(m=>{ const ph=photoOf(m); if(!ph) return; if(!byPhoto.has(ph)) byPhoto.set(ph,[]); byPhoto.get(ph).push(m); });
+  byPhoto.forEach((marks,ph)=>{
+    const set=new Set(marks);
+    const rest=ph.strokes.filter(m=>!set.has(m));
+    const picked=ph.strokes.filter(m=>set.has(m));   // keep the moved marks' relative order
+    ph.strokes = toFront ? rest.concat(picked) : picked.concat(rest);
+  });
   redrawAllPhotos(); saveLocal(); updatePhotoSelBar();
 }
-// A− / A+ resize the selected callouts; with nothing selected they set the size
-// used for the next one, mirroring how the colour picker behaves.
-function nudgePhotoTextSize(delta){
-  const texts=selectedPhotoTexts();
-  if(texts.length){
-    recordHistory();
-    texts.forEach(m=>{ m.size=Math.max(10,Math.min(200,Math.round((+m.size||32)+delta))); });
-    redrawAllPhotos(); saveLocal();
-  } else {
-    photoTextSize=Math.max(10,Math.min(200,Math.round(photoTextSize+delta)));
-    const h=byId("photoHint"); if(h) h.textContent="New callouts will be "+photoTextSize+"pt.";
-  }
-  updatePhotoSelBar();
+function photoSelectionAtFront(){ return [...photoSelMarks].every(m=>{ const ph=photoOf(m); return ph && ph.strokes[ph.strokes.length-1]===m; }); }
+function photoSelectionAtBack(){ return [...photoSelMarks].every(m=>{ const ph=photoOf(m); return ph && ph.strokes[0]===m; }); }
+function flipPhotoArrows(){
+  const arrows=[...photoSelMarks].filter(m=>m.type==="arrow" && m.pts && m.pts.length===2);
+  if(!arrows.length) return;
+  recordHistory();
+  arrows.forEach(m=>m.pts.reverse());
+  redrawAllPhotos(); saveLocal();
 }
+function alignPhotoSelection(edge){
+  const marks=[...photoSelMarks];
+  if(marks.length<2 || new Set(marks.map(photoOf)).size!==1) return;   // one photo only
+  recordHistory();
+  const bounds=marks.map(m=>markBoundsN(m,1,1,ctx));
+  const lo=(k)=>Math.min(...bounds.map(b=>b[k])), hi=(k)=>Math.max(...bounds.map(b=>b[k]));
+  const target = edge==="left"?lo("x0") : edge==="right"?hi("x1") : edge==="top"?lo("y0") : edge==="bottom"?hi("y1")
+    : edge==="centerh"?(lo("x0")+hi("x1"))/2 : (lo("y0")+hi("y1"))/2;
+  marks.forEach((m,i)=>{
+    const b=bounds[i];
+    if(edge==="left") translateMarkN(m,target-b.x0,0);
+    else if(edge==="right") translateMarkN(m,target-b.x1,0);
+    else if(edge==="top") translateMarkN(m,0,target-b.y0);
+    else if(edge==="bottom") translateMarkN(m,0,target-b.y1);
+    else if(edge==="centerh") translateMarkN(m,target-(b.x0+b.x1)/2,0);
+    else if(edge==="centerv") translateMarkN(m,0,target-(b.y0+b.y1)/2);
+  });
+  redrawAllPhotos(); saveLocal();
+}
+
+/* ---- bounding-box + vertex handles on the one selected mark ----
+   Reshaping is deliberately single-selection: with several marks selected you can still
+   move/delete/duplicate/align them as a group, just not drag a handle — there's no sane
+   "everyone scales together" default, and PDF Expert doesn't offer one either. */
+function markPtsBoundsN(pts){
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const p of pts){ x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y); }
+  return {x0,y0,x1,y1};
+}
+const BBOX_HANDLE_IDS=["nw","n","ne","w","e","sw","s","se"];
+const BBOX_HANDLE_OPPOSITE={nw:"se",n:"s",ne:"sw",w:"e",e:"w",sw:"ne",s:"n",se:"nw"};
+function bboxHandlePos(b,id){
+  const mx=(b.x0+b.x1)/2, my=(b.y0+b.y1)/2;
+  return {nw:{x:b.x0,y:b.y0},n:{x:mx,y:b.y0},ne:{x:b.x1,y:b.y0},
+          w:{x:b.x0,y:my},                    e:{x:b.x1,y:my},
+          sw:{x:b.x0,y:b.y1},s:{x:mx,y:b.y1},se:{x:b.x1,y:b.y1}}[id];
+}
+// scales st.pts (and .tip) so the dragged handle moves to newPt while the OPPOSITE handle
+// stays fixed; edge handles (n/s/e/w) move only their own axis. Stroke width never changes.
+function scaleMarkByHandle(st, handleId, newPt, keepAspect){
+  const b=markPtsBoundsN(st.pts||[]);
+  const opp=bboxHandlePos(b,BBOX_HANDLE_OPPOSITE[handleId]);
+  const orig=bboxHandlePos(b,handleId);
+  const affectsX = handleId!=="n" && handleId!=="s";
+  const affectsY = handleId!=="e" && handleId!=="w";
+  let sx=1, sy=1;
+  if(affectsX){ const d0=orig.x-opp.x; sx = Math.abs(d0)>1e-6 ? (newPt.x-opp.x)/d0 : 1; }
+  if(affectsY){ const d0=orig.y-opp.y; sy = Math.abs(d0)>1e-6 ? (newPt.y-opp.y)/d0 : 1; }
+  if(keepAspect && affectsX && affectsY){ const s=(Math.abs(sx)+Math.abs(sy))/2; sx=(sx<0?-1:1)*s; sy=(sy<0?-1:1)*s; }
+  for(const p of (st.pts||[])){ p.x=opp.x+(p.x-opp.x)*sx; p.y=opp.y+(p.y-opp.y)*sy; }
+  if(st.tip){ st.tip.x=opp.x+(st.tip.x-opp.x)*sx; st.tip.y=opp.y+(st.tip.y-opp.y)*sy; }
+}
+// hit priority: vertex handle -> bbox handle -> callout tip handle -> null.
+function photoHandleHit(ph,p,cw,chh,scale,ptrType){
+  if(photoSelMarks.size!==1) return null;
+  const st=[...photoSelMarks][0];
+  if(!ph.strokes.includes(st)) return null;
+  const type=st.type||"pen";
+  const thr=(ptrType==="touch"?16:10)/(scale||1);
+  if(type==="text"){
+    if(!st.tip) return null;
+    const d=Math.hypot((st.tip.x-p.x)*cw,(st.tip.y-p.y)*chh);
+    return d<=thr ? {kind:"tip",mark:st} : null;
+  }
+  if(type==="line"||type==="polygon"||type==="arrow"){
+    let best=null,bestD=Infinity;
+    (st.pts||[]).forEach((v,idx)=>{
+      const d=Math.hypot((v.x-p.x)*cw,(v.y-p.y)*chh);
+      if(d<=thr && d<bestD){ best={kind:"vertex",mark:st,idx}; bestD=d; }
+    });
+    if(best) return best;
+  }
+  const b=markPtsBoundsN(st.pts||[]);
+  let best=null,bestD=Infinity;
+  for(const id of BBOX_HANDLE_IDS){
+    const hp=bboxHandlePos(b,id);
+    const d=Math.hypot((hp.x-p.x)*cw,(hp.y-p.y)*chh);
+    if(d<=thr && d<bestD){ best={kind:"bbox",mark:st,handle:id}; bestD=d; }
+  }
+  return best;
+}
+
+/* ---- eraser: ink only (pen/highlight) — ported from eraseStrokesAt (world coords over
+   P.objects) to normalized photo coords over one photo's strokes. Every other mark type
+   passes through untouched: a rep scrubbing out a stray scribble must not lose a carefully
+   placed arrow. ---- */
+function photoEraseAt(ph, p, radiusPx, cw, chh){
+  let changed=false;
+  const out=[];
+  for(const m of ph.strokes){
+    const type=m.type||"pen";
+    if((type!=="pen" && type!=="highlight") || !m.pts || !m.pts.length){ out.push(m); continue; }
+    let run=[], anyCut=false;
+    for(const pt of m.pts){
+      const d=Math.hypot((pt.x-p.x)*cw,(pt.y-p.y)*chh);
+      if(d<=radiusPx){ anyCut=true; if(run.length>1) out.push(Object.assign({},m,{id:uid(),pts:run})); run=[]; }
+      else run.push(pt);
+    }
+    if(!anyCut){ out.push(m); continue; }
+    changed=true;
+    if(run.length>1) out.push(Object.assign({},m,{id:uid(),pts:run}));
+  }
+  if(changed) ph.strokes=out;
+  return changed;
+}
+
 function updatePhotoSelBar(){
   const bar=byId("photoSelBar"); if(!bar) return;
   const n=photoSelMarks.size;
   const show = curPage==="photos" && photoTool==="select" && n>0 && !photoLine;
   bar.style.display = show ? "flex" : "none";
-  if(!show) return;
-  const texts=selectedPhotoTexts();
-  byId("psEdit").style.display   = texts.length===1 && n===1 ? "" : "none";
-  byId("psSmaller").style.display= texts.length ? "" : "none";
-  byId("psBigger").style.display = texts.length ? "" : "none";
+  if(!show){ const row=byId("psAlignRow"); if(row) row.style.display="none"; return; }
+  const texts=[...photoSelMarks].filter(m=>(m.type||"pen")==="text");
+  const arrows=[...photoSelMarks].filter(m=>m.type==="arrow");
+  const samePhoto = new Set([...photoSelMarks].map(photoOf)).size===1;
+  byId("psEdit").style.display  = texts.length===1 && n===1 ? "" : "none";
+  byId("psFlip").style.display  = arrows.length ? "" : "none";
+  byId("psFront").style.display = photoSelectionAtFront() ? "none" : "";
+  byId("psBack").style.display  = photoSelectionAtBack() ? "none" : "";
+  byId("psAlign").style.display = (n>=2 && samePhoto) ? "" : "none";
+  if(!(n>=2 && samePhoto)){ const row=byId("psAlignRow"); if(row) row.style.display="none"; }
   byId("psDelLabel").textContent = n>1 ? "Delete ("+n+")" : "Delete";
 }
 (function(){
   const b=(id,fn)=>{ const el=byId(id); if(el) el.onclick=fn; };
   b("psDelete",()=>deletePhotoSelection());
   b("psClear",()=>clearPhotoSel());
-  b("psEdit",()=>{ const t=selectedPhotoTexts()[0]; if(t) editPhotoText(t); });
-  b("psSmaller",()=>nudgePhotoTextSize(-6));
-  b("psBigger",()=>nudgePhotoTextSize(6));
+  b("psEdit",()=>{
+    const m=[...photoSelMarks].filter(x=>(x.type||"pen")==="text")[0]; if(!m) return;
+    const ph=photoOf(m), info=ph&&photoCardInfo.get(ph.id);
+    if(info) openPhotoTextEditor(ph,m,info.cv,info.V,info.cw,info.chh,false);
+  });
+  b("psDup",()=>duplicatePhotoSelection());
+  b("psFront",()=>movePhotoSelectionZ(true));
+  b("psBack",()=>movePhotoSelectionZ(false));
+  b("psFlip",()=>flipPhotoArrows());
+  b("psAlign",()=>{ const row=byId("psAlignRow"); if(row) row.style.display=(row.style.display==="none"?"flex":"none"); });
+  b("psAlignL",()=>alignPhotoSelection("left"));   b("psAlignCH",()=>alignPhotoSelection("centerh"));
+  b("psAlignR",()=>alignPhotoSelection("right"));  b("psAlignT",()=>alignPhotoSelection("top"));
+  b("psAlignCV",()=>alignPhotoSelection("centerv"));b("psAlignB",()=>alignPhotoSelection("bottom"));
 })();
+const PHOTO_TOOL_HINTS={
+  select:"Select: tap a mark to select it (tap again to edit text), drag to move, drag a handle to reshape. The bar at the bottom acts on the selection.",
+  pen:"Pen: drag to draw freehand.",
+  highlight:"Marker: drag to draw a translucent highlight.",
+  line:"Line: tap each corner; ✓ Done to finish or ↶ Undo point to step back.",
+  rect:"Box: drag to draw. Shift = square.",
+  ellipse:"Oval: drag to draw. Shift = circle.",
+  arrow:"Arrow: drag from tail to head. Shift snaps to 45°.",
+  polygon:"Shape: tap each corner; ✓ Done to close it (needs 3+ points).",
+  text:"Text: tap for an auto-size box, or drag to set a width. Tap an existing box to select it, tap again to edit.",
+  callout:"Callout: press on what you're pointing at, drag to where the label should sit.",
+  eraser:"Eraser: drag over pen/marker ink to erase it. Shapes and text are untouched — delete those with Select."
+};
 function setPhotoTool(t){
   photoTool=t;
   document.querySelectorAll(".ptool").forEach(b=>b.classList.toggle("active",b.dataset.ptool===t));
   const hint=byId("photoHint");
-  if(hint) hint.textContent = t==="select" ? "Select: tap a mark, drag to move, drag its dots to reshape. Double-tap a callout to edit it. The bar at the bottom edits, resizes (A−/A+) and deletes."
-    : t==="pen" ? "Pen: drag to draw freehand."
-    : t==="line" ? "Line: tap each corner; use ✓ Done to finish or ↶ Undo point to step back."
-    : "Text: click where you want a callout, then type.";
+  if(hint){ hint.textContent=PHOTO_TOOL_HINTS[t]||""; hint.style.display=hint.textContent?"block":"none"; }
   cancelPhotoLine();
   if(t!=="select" && photoSelMarks.size){ photoSelMarks.clear(); }
   updatePhotoSelBar();
-  if(curPage==="photos") renderPhotos();
+  buildPhotoOptbar();
+  // Patch the live cards instead of renderPhotos(): rebuilding reset #photoScroll to the top on
+  // every tool switch, and handlers already read photoTool live — only the cursor is baked in.
+  photoCardInfo.forEach(({cv})=>{ cv.style.cursor = t==="select" ? "default" : "crosshair"; });
+  redrawAllPhotos();
 }
 document.querySelectorAll(".ptool").forEach(b=>b.onclick=()=>setPhotoTool(b.dataset.ptool));
 setPhotoTool("pen");
 
-// in-progress polyline for the line tool (single active across cards)
+// in-progress polyline/polygon for the line/polygon tools (single active across cards).
+// `closed` (set by the polygon tool) needs >=3 points to survive, matching a 1-point
+// line's discard threshold; `type` picks which mark it commits as.
 function finishPhotoLine(){
-  if(photoLine){ if(photoLine.mark.pts.length<2){ const i=photoLine.ph.strokes.indexOf(photoLine.mark); if(i>=0) photoLine.ph.strokes.splice(i,1); } else { recordHistory(); /* commit */ } const rd=photoLine.redraw; photoLine=null; if(rd) rd(); saveLocal(); }
+  if(photoLine){
+    const need = photoLine.closed ? 3 : 2;
+    if(photoLine.mark.pts.length<need){ const i=photoLine.ph.strokes.indexOf(photoLine.mark); if(i>=0) photoLine.ph.strokes.splice(i,1); }
+    else { recordHistory(); photoSelMarks=new Set([photoLine.mark]); }
+    const rd=photoLine.redraw; photoLine=null; if(rd) rd(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar();
+  }
   updatePhotoLineBar();
 }
 function cancelPhotoLine(){
@@ -4818,28 +5316,74 @@ function updatePhotoLineBar(){
 /* ---- mark geometry helpers (normalized 0..1 coords) ---- */
 // On-canvas px for a photo callout. Scales with the displayed canvas width so text
 // stays legible & proportional instead of rendering at a fixed tiny size.
-function photoTextPx(st,cw){ return Math.max(18,(st.size||32)*cw/520); }
+/* Marks are authored in px against a 520px-wide preview and stored that way. Now that a
+   card is as wide as its column, every mark has to be scaled by cw/PHOTO_REF_W — exactly
+   what photoSnapshot's `pscale` already does for the full-res PDF. Miss one and a stroke
+   drawn on a wide card prints at a different thickness than it looked on screen. */
+const PHOTO_REF_W=520;
+function photoTextPx(st,cw){ return Math.max(18,(st.size||32)*cw/PHOTO_REF_W); }
+function photoStrokePx(w,cw){ return Math.max(1,(w||7)*cw/PHOTO_REF_W); }
 function markBoundsN(st,cw,chh,pctx){
   if((st.type||"pen")==="text"){
-    const fs=photoTextPx(st,cw);
-    pctx.save();pctx.font="700 "+fs+"px Arial";const tw=pctx.measureText(st.text||"").width;pctx.restore();
-    return {x0:st.x, y0:st.y, x1:st.x+(tw/cw), y1:st.y+(fs/chh)};
+    const px=photoTextPx(st,cw);
+    const lay=layoutTextBox(pctx,st,px, st.w==null?null:st.w*cw);
+    const pad=textBoxPad(px);
+    const w = (st.w==null ? lay.width+pad.x*2 : st.w*cw)/cw;
+    const h = lay.height/chh;
+    let b={x0:st.x, y0:st.y, x1:st.x+w, y1:st.y+h};
+    if(st.tip){ b={x0:Math.min(b.x0,st.tip.x),y0:Math.min(b.y0,st.tip.y),x1:Math.max(b.x1,st.tip.x),y1:Math.max(b.y1,st.tip.y)}; }
+    return b;
   }
   let x0=1,y0=1,x1=0,y1=0;
   for(const p of (st.pts||[])){ x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y); }
-  return {x0,y0,x1,y1};
+  const pad=photoStrokePx(st.width||3,cw)/2/cw;
+  return {x0:x0-pad,y0:y0-pad,x1:x1+pad,y1:y1+pad};
 }
 function markHitN(st,p,cw,chh,pctx){
-  if((st.type||"pen")==="text"){
+  const type=st.type||"pen";
+  if(type==="text"){
     const b=markBoundsN(st,cw,chh,pctx);
-    return p.x>=b.x0-(6/cw)&&p.x<=b.x1+(6/cw)&&p.y>=b.y0-(6/chh)&&p.y<=b.y1+(6/chh);
+    const inBox = p.x>=b.x0-(6/cw)&&p.x<=b.x1+(6/cw)&&p.y>=b.y0-(6/chh)&&p.y<=b.y1+(6/chh);
+    if(inBox) return true;
+    if(st.tip){ return ptSegDistN(p, {x:(b.x0+b.x1)/2,y:(b.y0+b.y1)/2}, st.tip) < 10/cw; }
+    return false;
   }
-  const pts=st.pts||[]; const thr=8/cw;
+  const pts=st.pts||[]; if(!pts.length) return false;
+  const thr=Math.max(8/cw, photoStrokePx(st.width||3,cw)/cw/2+4/cw);
+  if(type==="rect"||type==="ellipse"){
+    const b=markPtsBoundsN(pts);
+    const inside = p.x>=b.x0&&p.x<=b.x1&&p.y>=b.y0&&p.y<=b.y1;
+    if(st.fill) return inside || nearRectEdge(p,b,thr,type);
+    return nearRectEdge(p,b,thr,type);
+  }
+  if(type==="polygon"){
+    let hitEdge=false;
+    for(let i=0;i<pts.length;i++){ if(ptSegDistN(p,pts[i],pts[(i+1)%pts.length])<thr){ hitEdge=true; break; } }
+    if(hitEdge) return true;
+    return st.fill ? pointInPolygonN(p,pts) : false;
+  }
   if(pts.length===1){ return Math.hypot(pts[0].x-p.x,pts[0].y-p.y)<thr; }
-  for(let i=0;i<pts.length-1;i++){
-    if(ptSegDistN(p,pts[i],pts[i+1])<Math.max(thr,(st.width||3)/cw)) return true;
-  }
+  for(let i=0;i<pts.length-1;i++){ if(ptSegDistN(p,pts[i],pts[i+1])<thr) return true; }
   return false;
+}
+function nearRectEdge(p,b,thr,type){
+  if(type==="ellipse"){
+    const rx=(b.x1-b.x0)/2||1e-6, ry=(b.y1-b.y0)/2||1e-6, cx=(b.x0+b.x1)/2, cy=(b.y0+b.y1)/2;
+    const nx=(p.x-cx)/rx, ny=(p.y-cy)/ry;
+    const rad=Math.hypot(nx,ny);
+    return Math.abs(rad-1) < thr/Math.min(rx,ry);
+  }
+  const corners=[{x:b.x0,y:b.y0},{x:b.x1,y:b.y0},{x:b.x1,y:b.y1},{x:b.x0,y:b.y1}];
+  for(let i=0;i<4;i++){ if(ptSegDistN(p,corners[i],corners[(i+1)%4])<thr) return true; }
+  return false;
+}
+function pointInPolygonN(p,pts){
+  let inside=false;
+  for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+    const a=pts[i], b=pts[j];
+    if(((a.y>p.y)!==(b.y>p.y)) && (p.x < (b.x-a.x)*(p.y-a.y)/((b.y-a.y)||1e-9)+a.x)) inside=!inside;
+  }
+  return inside;
 }
 function ptSegDistN(p,a,b){
   const dx=b.x-a.x,dy=b.y-a.y;const L2=dx*dx+dy*dy;
@@ -4847,12 +5391,59 @@ function ptSegDistN(p,a,b){
   const cx=a.x+t*dx,cy=a.y+t*dy;return Math.hypot(p.x-cx,p.y-cy);
 }
 function translateMarkN(st,dx,dy){
-  if((st.type||"pen")==="text"){ st.x+=dx; st.y+=dy; }
+  if((st.type||"pen")==="text"){ st.x+=dx; st.y+=dy; if(st.tip){ st.tip.x+=dx; st.tip.y+=dy; } }
   else { for(const p of (st.pts||[])) { p.x+=dx; p.y+=dy; } }
 }
 byId("btnAddPhoto").onclick=()=>byId("photoInput").click();
-byId("photoInput").onchange=e=>{
-  const files=[...e.target.files];
+byId("photoInput").onchange=e=>{ importPhotoFiles([...e.target.files]); e.target.value=""; };
+// The camera gets its own button + input (see #cameraInput) so one tap opens the camera.
+// Both funnel into importPhotoFiles.
+(function(){
+  const btn=byId("btnTakePhoto"), inp=byId("cameraInput");
+  if(!btn||!inp) return;
+  btn.onclick=()=>openCamera();   // falls back to inp.click() when there is no getUserMedia
+  inp.onchange=e=>{ importPhotoFiles([...e.target.files]); e.target.value=""; };
+})();
+
+// A 12MP iPad shot is ~4032px / ~5MB of base64 — several of those exhaust WKWebView's
+// memory and bloat the IndexedDB mirror and the "Save" JSON for no visible gain (the
+// biggest a photo ever prints is a half page). Cap the long edge on import.
+const PHOTO_MAX_EDGE=2000;
+function downscaleDataUrl(img,dataUrl){
+  const long=Math.max(img.naturalWidth,img.naturalHeight);
+  if(!long || long<=PHOTO_MAX_EDGE) return null;
+  try{
+    const k=PHOTO_MAX_EDGE/long;
+    const c=document.createElement("canvas");
+    c.width =Math.max(1,Math.round(img.naturalWidth *k));
+    c.height=Math.max(1,Math.round(img.naturalHeight*k));
+    const cx=c.getContext("2d");
+    cx.drawImage(img,0,0,c.width,c.height);   // WebKit/Blink apply EXIF orientation here, as <img> does
+    const out=c.toDataURL("image/jpeg",0.86);
+    // A tiny result means the encode failed; keep the original rather than ship a blank photo.
+    return (out && out.length>2048 && out.length<dataUrl.length) ? {data:out,w:c.width,h:c.height} : null;
+  }catch(err){ return null; }
+}
+
+/* The one place photos enter the job: both the file picker and the burst camera land
+   here, so ids, the blob store, undo and autosave stay in one spot.
+   entries: [{dataUrl,w,h,name}] — already sized; returns how many were added. */
+function commitPhotos(entries){
+  entries=(entries||[]).filter(Boolean);
+  if(!entries.length) return 0;
+  recordHistory();                     // importing photos is now undoable
+  entries.forEach(en=>{
+    const id=newPhotoId();
+    putBlob(id,en.dataUrl);            // image data goes to the blob store, not onto P
+    P.photos.push({id,name:en.name||"photo.jpg",w:en.w,h:en.h,strokes:[]});
+  });
+  renderPhotos();
+  saveLocal();                         // ...and actually persisted; this never fired before
+  return entries.length;
+}
+
+function importPhotoFiles(files){
+  files=(files||[]).filter(f=>f && (!f.type || /^image\//.test(f.type)));
   if(!files.length) return;
   // Reserve a slot per file up front so the photos land in the order they were
   // picked — the decodes finish out of order, which used to shuffle them.
@@ -4860,23 +5451,19 @@ byId("photoInput").onchange=e=>{
   let pending=files.length;
   const finish=()=>{
     if(--pending>0) return;
-    const added=slots.filter(Boolean);
-    if(added.length){
-      recordHistory();                 // importing photos is now undoable
-      added.forEach(p=>P.photos.push(p));
-    }
-    renderPhotos();
-    saveLocal();                       // ...and actually persisted; this never fired before
+    // Every file failed to decode — say so instead of looking like the button did nothing.
+    if(!commitPhotos(slots.filter(Boolean)))
+      alert(files.length>1 ? "Those photos couldn\u2019t be read." : "That photo couldn\u2019t be read.");
   };
   files.forEach((f,i)=>{
     const rd=new FileReader();
     rd.onload=()=>{
       const img=new Image();
       img.onload=()=>{
-        const id=newPhotoId();
-        putBlob(id,rd.result);         // image data goes to the blob store, not onto P
-        slots[i]={id,name:f.name,w:img.naturalWidth,h:img.naturalHeight,strokes:[]};
-        finish();
+        const small=downscaleDataUrl(img,rd.result);
+        slots[i]={dataUrl:small?small.data:rd.result, name:f.name||"photo.jpg",
+                  w:small?small.w:img.naturalWidth, h:small?small.h:img.naturalHeight};
+        finish();                      // strokes are normalized 0..1, so resizing is safe
       };
       img.onerror=finish;
       img.src=rd.result;
@@ -4884,61 +5471,553 @@ byId("photoInput").onchange=e=>{
     rd.onerror=finish;
     rd.readAsDataURL(f);
   });
-  e.target.value="";
-};
+}
 
-function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
-  for(const st of ph.strokes){
-    const type=st.type||"pen";
-    if(type==="text"){
-      const fs=photoTextPx(st,cw);
-      pctx.save();
-      pctx.font="700 "+fs+"px Arial";
-      pctx.textBaseline="top";
-      const tx=st.x*cw, ty=st.y*chh;
-      const tw=pctx.measureText(st.text||"").width;
-      pctx.fillStyle="rgba(255,255,255,.82)";
-      const padx=5,pady=3;
-      roundRect(pctx,tx-padx,ty-pady,tw+padx*2,fs+pady*2,4);pctx.fill();
-      pctx.strokeStyle=st.color||"#e01b24";pctx.lineWidth=1.5;pctx.stroke();
-      pctx.fillStyle=st.color||"#e01b24";
-      pctx.fillText(st.text||"",tx,ty);
-      pctx.restore();
-      continue;
-    }
-    if(!st.pts||st.pts.length<1) continue;
-    pctx.save();pctx.strokeStyle=st.color;pctx.lineWidth=st.width;pctx.lineCap="round";pctx.lineJoin="round";
-    pctx.beginPath();pctx.moveTo(st.pts[0].x*cw,st.pts[0].y*chh);
-    for(let i=1;i<st.pts.length;i++)pctx.lineTo(st.pts[i].x*cw,st.pts[i].y*chh);
-    pctx.stroke();
-    if(type==="line"){ for(const p of st.pts){ pctx.fillStyle="#fff";pctx.lineWidth=1.5;pctx.beginPath();pctx.arc(p.x*cw,p.y*chh,3,0,7);pctx.fill();pctx.stroke(); } }
-    pctx.restore();
+/* ---------- BURST CAMERA ----------------------------------------------------
+   iOS's <input capture> sheet returns a single photo and closes, so documenting a
+   house meant tapping "Take photo" once per frame. This is an in-app viewfinder:
+   shutter as many times as you like, then Done imports the whole burst at once.
+   getUserMedia isn't everywhere (older WKWebView, a plain http:// host), so every
+   failure path falls back to that one-shot input rather than dead-ending. */
+let camStream=null;      // live MediaStream, or null when the viewfinder is closed
+let camShots=[];         // this burst, not yet committed
+let camFacing="environment";
+let camBusy=false;
+
+function camNote(t){
+  const m=byId("camMsg"); if(!m) return;
+  m.textContent=t||""; m.style.display=t?"block":"none";
+}
+
+function camFallback(){
+  closeCamera();
+  const inp=byId("cameraInput"); if(inp) inp.click();
+}
+
+async function camStart(facing){
+  camStopStream();
+  const stream=await navigator.mediaDevices.getUserMedia({
+    audio:false,
+    // "ideal", never "exact": an exact constraint the device can't meet rejects outright,
+    // which would drop a perfectly usable front camera on the floor.
+    video:{ facingMode:{ideal:facing}, width:{ideal:4096}, height:{ideal:3072} }
+  });
+  camStream=stream;
+  const v=byId("camVideo");
+  v.srcObject=stream;
+  v.muted=true; v.playsInline=true;
+  try{ await v.play(); }catch(err){}   // a muted inline stream is allowed to autoplay
+  // videoWidth is 0 until the first frame lands — a shutter tap in that window would
+  // save a blank frame. Hold here (bounded, ~3s) so the caller's "Starting camera…"
+  // note stays up until there is something real to photograph.
+  for(let i=0; i<60 && !v.videoWidth; i++) await new Promise(r=>setTimeout(r,50));
+}
+
+/* Always release the tracks: otherwise the camera indicator stays lit and the
+   session keeps draining the battery after the viewfinder is gone. */
+function camStopStream(){
+  if(camStream){ camStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(err){} }); camStream=null; }
+  const v=byId("camVideo");
+  if(v){ try{ v.pause(); }catch(err){} v.srcObject=null; }
+}
+
+async function openCamera(){
+  const stage=byId("camStage");
+  if(!stage || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    const inp=byId("cameraInput"); if(inp) inp.click();
+    return;
   }
-  // rubber band for in-progress line on this photo
+  camShots=[]; camBusy=false;
+  byId("camStrip").innerHTML="";
+  byId("camDone").disabled=true;
+  byId("camDone").textContent="\u2713 Done";
+  byId("camFlip").style.display="none";
+  stage.style.display="flex";
+  camNote("Starting camera\u2026");
+  try{ await camStart(camFacing); }
+  catch(err){ camFallback(); return; }   // no camera, or permission denied
+  camNote("");
+  // Only offer Flip when there really is a second camera to flip to.
+  try{
+    const list=await navigator.mediaDevices.enumerateDevices();
+    if(list.filter(d=>d.kind==="videoinput").length>1) byId("camFlip").style.display="";
+  }catch(err){}
+}
+
+function closeCamera(){
+  camStopStream();
+  camShots=[]; camBusy=false;
+  const strip=byId("camStrip"); if(strip) strip.innerHTML="";
+  const stage=byId("camStage"); if(stage) stage.style.display="none";
+  camNote("");
+}
+
+function camShoot(){
+  const v=byId("camVideo");
+  const w=v?v.videoWidth:0, h=v?v.videoHeight:0;
+  if(camBusy) return;
+  // Still warming up (camStart waits for a frame, but the stream can drop out mid-burst).
+  if(!w || !h){ camNote("Camera isn\u2019t ready yet."); return; }
+  camBusy=true;
+  try{
+    const k=Math.min(1, PHOTO_MAX_EDGE/Math.max(w,h));   // same cap as an imported photo
+    const c=document.createElement("canvas");
+    c.width =Math.max(1,Math.round(w*k));
+    c.height=Math.max(1,Math.round(h*k));
+    c.getContext("2d").drawImage(v,0,0,c.width,c.height);
+    const data=c.toDataURL("image/jpeg",0.86);
+    if(!data || data.length<2048){ camNote("Couldn\u2019t capture that frame."); return; }
+    camShots.push({dataUrl:data,w:c.width,h:c.height,name:"photo-"+(camShots.length+1)+".jpg"});
+    camNote("");
+    const th=document.createElement("img"); th.src=data;
+    const strip=byId("camStrip"); strip.appendChild(th); strip.scrollLeft=strip.scrollWidth;
+    const done=byId("camDone");
+    done.disabled=false; done.textContent="\u2713 Done ("+camShots.length+")";
+    const fl=byId("camFlash");
+    if(fl){ fl.style.opacity="0.85"; setTimeout(()=>{ fl.style.opacity="0"; },60); }
+  }catch(err){ camNote("Couldn\u2019t capture that frame."); }
+  finally{ camBusy=false; }
+}
+
+function camFinish(){
+  const shots=camShots.slice();   // closeCamera clears the burst, so copy it out first
+  closeCamera();
+  commitPhotos(shots);
+}
+
+async function camSwitchFacing(){
+  camFacing = (camFacing==="environment") ? "user" : "environment";
+  camNote("Switching\u2026");
+  try{ await camStart(camFacing); camNote(""); }
+  catch(err){
+    // Couldn't switch — go back to the camera that was working rather than stranding them.
+    camFacing = (camFacing==="environment") ? "user" : "environment";
+    try{ await camStart(camFacing); camNote(""); }
+    catch(err2){ camFallback(); }
+  }
+}
+
+(function(){
+  const shot=byId("camShot"); if(!shot) return;
+  shot.onclick=camShoot;
+  byId("camDone").onclick=camFinish;
+  byId("camCancel").onclick=closeCamera;
+  byId("camFlip").onclick=camSwitchFacing;
+  // Backgrounding the app suspends the stream anyway; drop it so the burst isn't
+  // silently lost to a frozen viewfinder when they come back.
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden && camStream) camFinish();
+  });
+})();
+
+/* ============================================================ */
+/* PHOTO MARK PAINTER                                          */
+/* ============================================================ */
+// Smoothed freehand ink: quadraticCurveTo through segment midpoints, using each raw point
+// as the control point. Raw points are stored unchanged (this is paint-only) — a sharp
+// input zigzag renders as round curves, matching PDF Expert; straight-edged types
+// (line/polygon/arrow) skip this and draw plain segments.
+function paintSmoothPath(ctx,pts,sx,sy){
+  if(pts.length<3){ ctx.moveTo(sx(pts[0]),sy(pts[0])); for(let i=1;i<pts.length;i++) ctx.lineTo(sx(pts[i]),sy(pts[i])); return; }
+  ctx.moveTo(sx(pts[0]),sy(pts[0]));
+  for(let i=1;i<pts.length-1;i++){
+    const cx=sx(pts[i]), cy=sy(pts[i]);
+    const mx=(cx+sx(pts[i+1]))/2, my=(cy+sy(pts[i+1]))/2;
+    ctx.quadraticCurveTo(cx,cy,mx,my);
+  }
+  const last=pts[pts.length-1];
+  ctx.lineTo(sx(last),sy(last));
+}
+// filled-triangle arrowhead(s), sized from the stroke width; the shaft is shortened so a
+// thick stroke doesn't poke through the tip. heads:2 draws both ends (a double arrow).
+function paintArrowShaft(ctx,x0,y0,x1,y1,strokeW,heads,color){
+  const ang=Math.atan2(y1-y0,x1-x0);
+  const hs=Math.max(8,strokeW*4.5), half=0.5236, shorten=hs*0.6;
+  function head(tx,ty,dirAng){
+    ctx.beginPath();
+    ctx.moveTo(tx,ty);
+    ctx.lineTo(tx-hs*Math.cos(dirAng-half),ty-hs*Math.sin(dirAng-half));
+    ctx.lineTo(tx-hs*Math.cos(dirAng+half),ty-hs*Math.sin(dirAng+half));
+    ctx.closePath();ctx.fillStyle=color;ctx.fill();
+  }
+  let sx0=x0,sy0=y0;
+  if(heads===2){ sx0=x0+shorten*Math.cos(ang); sy0=y0+shorten*Math.sin(ang); }
+  const sx1=x1-shorten*Math.cos(ang), sy1=y1-shorten*Math.sin(ang);
+  ctx.beginPath();ctx.moveTo(sx0,sy0);ctx.lineTo(sx1,sy1);ctx.stroke();
+  head(x1,y1,ang);
+  if(heads===2) head(x0,y0,ang+Math.PI);
+}
+/* Single painter for every mark type, shared by the on-screen card (drawPhotoMarks) and
+   the full-res PDF flatten (photoSnapshot) — before this they were a copy-paste that had
+   already drifted (photoSnapshot's text-plate padding was hardcoded, not k-scaled). `cw`
+   is the width to scale against: the card's on-screen width on screen, ph.w in the PDF.
+   Deliberate call: the old white vertex dots on every FINISHED line mark were editing
+   chrome that photoSnapshot never actually drew (screen/PDF had already drifted) — they're
+   dropped here rather than made to print, because Step 7's selection vertex handles now
+   cover that job only when the mark is actually selected, which is the more useful signal. */
+function paintPhotoMark(ctx, st, cw, chh){
+  const type=st.type||"pen";
+  if(type==="text"){ paintPhotoText(ctx,st,cw,chh); return; }
+  const pts=st.pts||[]; if(!pts.length) return;
+  const sx=p=>p.x*cw, sy=p=>p.y*chh;
+  const strokeW=photoStrokePx(st.width,cw);
+  ctx.save();
+  ctx.globalAlpha = st.opacity==null?1:st.opacity;
+  ctx.strokeStyle=st.color; ctx.lineWidth=strokeW; ctx.lineJoin="round";
+  if(st.dash) ctx.setLineDash([3*strokeW,2*strokeW]);
+  if(type==="rect"||type==="ellipse"){
+    const a=pts[0],b=pts[1];
+    const x0=Math.min(sx(a),sx(b)),y0=Math.min(sy(a),sy(b)),x1=Math.max(sx(a),sx(b)),y1=Math.max(sy(a),sy(b));
+    ctx.beginPath();
+    if(type==="rect") ctx.rect(x0,y0,x1-x0,y1-y0);
+    else ctx.ellipse((x0+x1)/2,(y0+y1)/2,Math.max(0.01,(x1-x0)/2),Math.max(0.01,(y1-y0)/2),0,0,7);
+    if(st.fill){ ctx.fillStyle=st.fill; ctx.fill(); }
+    ctx.stroke();
+  } else if(type==="polygon"){
+    ctx.beginPath();ctx.moveTo(sx(pts[0]),sy(pts[0]));
+    for(let i=1;i<pts.length;i++) ctx.lineTo(sx(pts[i]),sy(pts[i]));
+    ctx.closePath();
+    if(st.fill){ ctx.fillStyle=st.fill; ctx.fill(); }
+    ctx.stroke();
+  } else if(type==="arrow"){
+    paintArrowShaft(ctx,sx(pts[0]),sy(pts[0]),sx(pts[1]),sy(pts[1]),strokeW,st.heads||1,st.color);
+  } else if(type==="pen"||type==="highlight"){
+    ctx.lineCap = type==="highlight" ? "square" : "round";
+    ctx.beginPath(); paintSmoothPath(ctx,pts,sx,sy); ctx.stroke();
+  } else { // line
+    ctx.lineCap="round";
+    ctx.beginPath();ctx.moveTo(sx(pts[0]),sy(pts[0]));
+    for(let i=1;i<pts.length;i++) ctx.lineTo(sx(pts[i]),sy(pts[i]));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+// text/callout mark: the shared text-box engine, plus a leader line to `tip` (a callout)
+// drawn BEFORE the plate so the plate sits on top, finished with the same arrowhead as
+// paintArrowShaft. `pctxForLayout` lets callers without a live 2d context (none today, but
+// keeps the signature honest) fall back to the passed ctx for measurement.
+function paintPhotoText(ctx, st, cw, chh){
+  const px=photoTextPx(st,cw);
+  const x=st.x*cw, y=st.y*chh;
+  const maxW = st.w==null ? null : st.w*cw;
+  ctx.save();
+  ctx.globalAlpha = st.opacity==null?1:st.opacity;
+  if(st.tip){
+    const lay=layoutTextBox(ctx,st,px,maxW), pad=textBoxPad(px);
+    const w=maxW==null?lay.width+pad.x*2:maxW, h=lay.height;
+    const cx=x+w/2, cy=y+h/2;
+    const tx=st.tip.x*cw, ty=st.tip.y*chh;
+    const strokeW=Math.max(1,px*1.5/14);
+    ctx.strokeStyle=st.color||"#1b2530"; ctx.lineWidth=strokeW;
+    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(tx,ty);ctx.stroke();
+    paintArrowShaft(ctx,cx,cy,tx,ty,strokeW,1,st.color||"#1b2530");
+  }
+  paintTextBox(ctx,st,x,y,px,maxW);
+  ctx.restore();
+}
+function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
+  for(const st of ph.strokes){ paintPhotoMark(pctx,st,cw,chh); }
+  // rubber band for an in-progress line/polygon on this photo
   if(liveCursor && photoLine && photoLine.ph===ph && photoLine.mark.pts.length){
     const m=photoLine.mark;
-    pctx.save();pctx.strokeStyle=m.color;pctx.lineWidth=m.width;pctx.setLineDash([6,4]);pctx.lineCap="round";
+    const k=cw/PHOTO_REF_W;
+    pctx.save();pctx.strokeStyle=m.color;pctx.lineWidth=photoStrokePx(m.width,cw);pctx.setLineDash([6*k,4*k]);pctx.lineCap="round";
     pctx.beginPath();const last=m.pts[m.pts.length-1];
     pctx.moveTo(last.x*cw,last.y*chh);pctx.lineTo(liveCursor.x*cw,liveCursor.y*chh);pctx.stroke();pctx.restore();
   }
 }
 
+/* Cards used to be a fixed 520px wide, so the pane only ever filled to a whole number
+   of cards and everything past that was a dead strip down the right-hand side. Instead:
+   work out how many ~520px columns fit, then share the full width out between them.
+   PHOTO_GAP must match #photoScroll's `gap`. */
+const PHOTO_CARD_TARGET=520, PHOTO_GAP=18;
+let photoCardW=0;                  // last width laid out, so a resize only rebuilds on a real change
+function photoCardWidth(){
+  const scroll=byId("photoScroll");
+  // clientWidth is 0 while the photo page is hidden; fall back so an off-screen
+  // renderPhotos() (loading a job, switching options) doesn't lay out 120px cards.
+  if(!scroll || !scroll.clientWidth) return PHOTO_CARD_TARGET;
+  const cs=getComputedStyle(scroll);
+  const pad=(parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0);
+  const avail=Math.max(160, scroll.clientWidth-pad);
+  const cols=Math.max(1, Math.floor((avail+PHOTO_GAP)/(PHOTO_CARD_TARGET+PHOTO_GAP)));
+  return Math.floor((avail-(cols-1)*PHOTO_GAP)/cols);
+}
+
+/* ============================================================ */
+/* PHOTO CONTEXTUAL OPTIONS + PALETTE (Steps 5/6/9)            */
+/* ============================================================ */
+function paletteChipsHTML(attr, current, includeNone){
+  const pal=photoPalette();
+  let h="";
+  if(includeNone) h+='<button class="pal-chip none'+(current==null?' active':'')+'" data-'+attr+'="none" title="No fill"></button>';
+  pal.colors.forEach((c,i)=>{ h+='<button class="pal-chip'+(current===c?' active':'')+'" data-'+attr+'="'+c+'" data-idx="'+i+'" style="background:'+c+'"></button>'; });
+  if(pal.recent) h+='<button class="pal-chip'+(current===pal.recent?' active':'')+'" data-'+attr+'="'+pal.recent+'" style="background:'+pal.recent+'" title="Recent custom color"></button>';
+  h+='<button class="pal-chip add" data-'+attr+'="__custom" title="Custom color">＋</button>';
+  return h;
+}
+// tap picks; long-press (~500ms) or right-click a preset chip redefines it via pickColor()
+function wirePaletteChips(scopeEl, attr, onPick){
+  scopeEl.querySelectorAll('[data-'+attr+']').forEach(btn=>{
+    const val=btn.dataset[attr];
+    let timer=null, longFired=false, downPt=null;
+    const clearT=()=>{ if(timer){ clearTimeout(timer); timer=null; } };
+    const canRedefine=btn.dataset.idx!=null;
+    btn.addEventListener("pointerdown",ev=>{
+      longFired=false; downPt={x:ev.clientX,y:ev.clientY};
+      if(canRedefine) timer=setTimeout(()=>{ longFired=true; redefinePaletteChip(+btn.dataset.idx); },500);
+    });
+    btn.addEventListener("pointermove",ev=>{ if(downPt && Math.hypot(ev.clientX-downPt.x,ev.clientY-downPt.y)>8) clearT(); });
+    btn.addEventListener("pointerup",()=>{ clearT(); if(!longFired) onPick(val); });
+    btn.addEventListener("pointerleave",clearT);
+    if(canRedefine) btn.addEventListener("contextmenu",ev=>{ ev.preventDefault(); redefinePaletteChip(+btn.dataset.idx); });
+  });
+}
+function redefinePaletteChip(idx){
+  const pal=photoPalette();
+  pickColor("Redefine palette color", pal.colors[idx], c=>{ pal.colors[idx]=c; recordHistory(); saveLocal(); buildPhotoOptbar(); redrawAllPhotos(); });
+}
+function resetPhotoPalette(){
+  const pal=photoPalette();
+  pal.colors=PHOTO_PALETTE_DEFAULT.slice(); pal.recent=null;
+  recordHistory(); saveLocal(); buildPhotoOptbar(); redrawAllPhotos();
+}
+function pickPaletteValue(val, applyFn){
+  if(val==="__custom") pickColor("Custom color","#e01b24",c=>{ photoPalette().recent=c; saveLocal(); applyFn(c); });
+  else if(val==="none") applyFn(null);
+  else applyFn(val);
+}
+// what the strip edits right now: the one selected/just-drawn mark, or the active
+// tool's remembered defaults. "multi" when 2+ marks are selected (Select tool only —
+// a drawing tool never lets its just-drawn selection grow past one mark).
+function photoOptTarget(){
+  const drawTools={select:1,rect:1,ellipse:1,arrow:1,polygon:1,callout:1,text:1};
+  if(photoSelMarks.size===1 && drawTools[photoTool]) return [...photoSelMarks][0];
+  return photoSelMarks.size>1 ? "multi" : "defaults";
+}
+function photoStyleApply(patch, commit){
+  const target=photoOptTarget();
+  if(target==="multi"){ applyPhotoStyleToSelection(patch, commit); return; }
+  if(target==="defaults"){
+    if(photoTool==="text"||photoTool==="callout") Object.assign(photoTextStyle,patch);
+    else if(photoToolStyle[photoTool]) Object.assign(photoToolStyle[photoTool],patch);
+    if(commit) buildPhotoOptbar();   // never mid-drag: only on release, or the slider gets yanked out from under the touch
+    return;
+  }
+  if(commit) recordHistory();
+  if("size" in patch && (target.type||"pen")==="text") applyTextSizeChange(target,patch.size);
+  else Object.assign(target,patch);
+  if(commit){ saveLocal(); buildPhotoOptbar(); }
+  redrawAllPhotos();
+}
+function buildPhotoOptbar(){
+  const bar=byId("photoOptbar"); if(!bar) return;
+  const g=(t)=>'<div class="ob-grp">'+t+'</div>';
+  const dv='<div class="div"></div>';
+  const target=photoOptTarget();
+  const of=(toolKey)=> (target==="defaults"||target==="multi") ? photoToolStyle[toolKey] : target;
+  let h="";
+  if(photoTool==="pen"||photoTool==="highlight"){
+    const st=of(photoTool);
+    h+=g('<label>Color</label>'+paletteChipsHTML("pcol",st.color,false))+dv
+     + g('<label>Width</label><input type="range" id="poWidth" min="1" max="'+(photoTool==="highlight"?60:30)+'" value="'+st.width+'">')+dv
+     + g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((st.opacity==null?1:st.opacity)*100)+'">')+dv
+     + g('<button class="chip" id="poPalReset" title="Restore default palette colors">↺ Palette</button>');
+  } else if(photoTool==="line"){
+    const st=of("line");
+    h+=g('<label>Color</label>'+paletteChipsHTML("pcol",st.color,false))+dv
+     + g('<label>Width</label><input type="range" id="poWidth" min="1" max="20" value="'+st.width+'">')+dv
+     + g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((st.opacity==null?1:st.opacity)*100)+'">')+dv
+     + g('<button class="chip'+(st.dash?' on':'')+'" id="poDash">Dashed</button>');
+  } else if(photoTool==="rect"||photoTool==="ellipse"||photoTool==="polygon"){
+    const st=of(photoTool);
+    h+=g('<label>Stroke</label>'+paletteChipsHTML("pcol",st.color,false))+dv
+     + g('<label>Fill</label>'+paletteChipsHTML("pfill",st.fill,true))+dv
+     + g('<label>Width</label><input type="range" id="poWidth" min="1" max="20" value="'+st.width+'">')+dv
+     + g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((st.opacity==null?1:st.opacity)*100)+'">')+dv
+     + g('<button class="chip'+(st.dash?' on':'')+'" id="poDash">Dashed</button>');
+  } else if(photoTool==="arrow"){
+    const st=of("arrow");
+    h+=g('<label>Color</label>'+paletteChipsHTML("pcol",st.color,false))+dv
+     + g('<label>Width</label><input type="range" id="poWidth" min="1" max="20" value="'+st.width+'">')+dv
+     + g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((st.opacity==null?1:st.opacity)*100)+'">')+dv
+     + g('<button class="chip'+(st.dash?' on':'')+'" id="poDash">Dashed</button>')+dv
+     + g('<button class="chip'+((st.heads||1)===1?' on':'')+'" id="poHead1">→ single</button><button class="chip'+((st.heads||1)===2?' on':'')+'" id="poHead2">↔ double</button>');
+  } else if(photoTool==="text"||photoTool==="callout"){
+    const isMark = target!=="defaults" && target!=="multi";
+    const s = isMark ? target : photoTextStyle;
+    h+=textStyleStripHTML(s,true)+dv
+     + g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((s.opacity==null?1:s.opacity)*100)+'">');
+  } else if(photoTool==="eraser"){
+    h+=g('<label>Size</label><input type="range" id="poEraseSize" min="10" max="80" value="'+photoToolStyle.eraser.size+'">');
+  } else if(photoTool==="select"){
+    if(target==="multi") h+='<span class="mini" style="color:#9fb0c0">'+photoSelMarks.size+' marks selected</span>';
+    else if(target!=="defaults"){
+      const m=target, type=m.type||"pen";
+      if(type==="text"){
+        h+=textStyleStripHTML(m,true)+dv
+         + g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((m.opacity==null?1:m.opacity)*100)+'">');
+      } else {
+        h+=g('<label>Color</label>'+paletteChipsHTML("pcol",m.color,false));
+        if(["rect","ellipse","polygon"].includes(type)) h+=dv+g('<label>Fill</label>'+paletteChipsHTML("pfill",m.fill,true));
+        h+=dv+g('<label>Width</label><input type="range" id="poWidth" min="1" max="60" value="'+m.width+'">')
+         +dv+g('<label>Opacity</label><input type="range" id="poOpac" min="10" max="100" value="'+Math.round((m.opacity==null?1:m.opacity)*100)+'">');
+        if(["line","rect","ellipse","polygon","arrow"].includes(type)) h+=dv+g('<button class="chip'+(m.dash?' on':'')+'" id="poDash">Dashed</button>');
+        if(type==="arrow") h+=dv+g('<button class="chip'+((m.heads||1)===1?' on':'')+'" id="poHead1">→</button><button class="chip'+((m.heads||1)===2?' on':'')+'" id="poHead2">↔</button>');
+      }
+    } else h+='<span class="mini" style="color:#9fb0c0">Tap a mark to edit it</span>';
+  }
+  const wrap=bar.parentElement, from=wrap ? wrap.getBoundingClientRect().height : 0;
+  bar.innerHTML=h;
+  wirePhotoOptbar();
+  // what the bar is editing, by type not id: re-selecting another line, or a slider commit
+  // rebuilding the same controls, must not replay the drop
+  const key=photoTool+":"+(typeof target==="object"&&target ? (target.type||"pen") : target);
+  if(key!==photoOptbarKey){ photoOptbarKey=key; if(wrap) animatePhotoOptbar(wrap,bar,from); }
+}
+/* The new controls are taller than the hint they replace, so the bar used to jump and shove the
+   photos down in one frame. Animate the wrap from its old height to its new one (the photos slide
+   with it) and drop the controls in. Measuring `from` before the swap means a rebuild mid-animation
+   continues from wherever it is instead of snapping. */
+function animatePhotoOptbar(wrap,bar,from){
+  if(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  wrap.style.transition="none"; wrap.style.height="";
+  const to=wrap.getBoundingClientRect().height;
+  bar.classList.remove("ob-drop"); void bar.offsetWidth; bar.classList.add("ob-drop");
+  if(Math.abs(to-from)<1) return;
+  wrap.style.height=from+"px"; void wrap.offsetHeight;
+  wrap.style.transition="height .22s cubic-bezier(.2,.8,.2,1)"; wrap.style.height=to+"px";
+  const done=e=>{ if(e && e.target!==wrap) return; wrap.removeEventListener("transitionend",done); wrap.style.transition=""; wrap.style.height=""; };
+  wrap.addEventListener("transitionend",done);
+}
+function wirePhotoOptbar(){
+  const bar=byId("photoOptbar"); if(!bar) return;
+  const commit=(patch,ok)=>photoStyleApply(patch,ok);
+  wirePaletteChips(bar,"pcol", v=>pickPaletteValue(v,c=>commit({color:c},true)));
+  wirePaletteChips(bar,"pfill", v=>pickPaletteValue(v,c=>commit({fill:c},true)));
+  const w=byId("poWidth");
+  if(w){ w.oninput=e=>commit({width:+e.target.value},false); w.onchange=e=>commit({width:+e.target.value},true); }
+  const o=byId("poOpac");
+  if(o){ o.oninput=e=>commit({opacity:+e.target.value/100},false); o.onchange=e=>commit({opacity:+e.target.value/100},true); }
+  if(byId("poDash")) byId("poDash").onclick=()=>{ const t=photoOptTarget(); const cur=(t==="defaults"?photoToolStyle[photoTool]:t).dash; commit({dash:!cur},true); };
+  if(byId("poHead1")) byId("poHead1").onclick=()=>commit({heads:1},true);
+  if(byId("poHead2")) byId("poHead2").onclick=()=>commit({heads:2},true);
+  if(byId("poEraseSize")) byId("poEraseSize").oninput=e=>{ photoToolStyle.eraser.size=+e.target.value; };
+  if(byId("poPalReset")) byId("poPalReset").onclick=()=>resetPhotoPalette();
+  wirePhotoTextStrip();
+}
+// mirrors the Diagram's wireTextStyleStrip() for the same textStyleStripHTML markup,
+// but against photoTextStyle / the selected mark, with Photos' commit primitives
+function wirePhotoTextStrip(){
+  if(!(photoTool==="text"||photoTool==="callout"||(photoTool==="select" && photoSelMarks.size===1 && ([...photoSelMarks][0].type||"pen")==="text"))) return;
+  const target=photoOptTarget();
+  const isMark = target!=="defaults" && target!=="multi";
+  const s = isMark ? target : photoTextStyle;
+  const g2=id=>byId(id);
+  const apply=(patch,commitIt)=>{
+    if(isMark){
+      if(commitIt) recordHistory();
+      if("size" in patch) applyTextSizeChange(s,patch.size); else Object.assign(s,patch);
+      if(commitIt){ saveLocal(); buildPhotoOptbar(); }
+      redrawAllPhotos();
+    } else { Object.assign(photoTextStyle,patch); if(commitIt) buildPhotoOptbar(); }
+  };
+  if(g2("opTFont")) g2("opTFont").onchange=e=>apply({font:e.target.value},true);
+  if(g2("opTSize")){ g2("opTSize").oninput=e=>apply({size:+e.target.value||14},false); g2("opTSize").onchange=e=>apply({size:+e.target.value||14},true); }
+  const curSize=()=>s.size||14;
+  if(g2("opTSizeDn")) g2("opTSizeDn").onclick=()=>apply({size:Math.max(6,curSize()-2)},true);
+  if(g2("opTSizeUp")) g2("opTSizeUp").onclick=()=>apply({size:Math.min(200,curSize()+2)},true);
+  if(g2("opTBold")) g2("opTBold").onclick=()=>apply({bold:!s.bold},true);
+  if(g2("opTItalic")) g2("opTItalic").onclick=()=>apply({italic:!s.italic},true);
+  if(g2("opTBorder")) g2("opTBorder").onclick=()=>apply({border:!(s.border!==false)},true);
+  const bar=byId("photoOptbar");
+  if(bar) wirePaletteChips(bar,"ptcol", v=>pickPaletteValue(v,c=>apply({color:c},true)));
+  if(g2("opTFill")) g2("opTFill").onclick=()=>pickColor("Background color",s.fill||"#ffffff",c=>apply({fill:c},true));
+  if(g2("opTFillNone")) g2("opTFillNone").onclick=()=>apply({fill:null},true);
+}
+
+/* Photos' text/callout editor: the Diagram's floating #floatEdit textarea (Step 9), just
+   positioned from a photo card's canvas + zoom instead of a Diagram label box. #floatEdit
+   is a child of #stage, which #photoStage also sits inside, so the same element serves both
+   pages without moving it in the DOM. Must open synchronously inside the pointer-up that
+   created or tapped the mark, or iOS won't raise the keyboard (see openEditorFor's comment). */
+let photoTextEditOpen=false;
+function openPhotoTextEditor(ph, mark, cv, V, cw, chh, isNew){
+  if(photoTextEditOpen) return;
+  photoTextEditOpen=true;
+  photoCardInfo.set(ph.id,{cv,V,cw,chh});
+  const stageEl=byId("stage");
+  const stageR=stageEl.getBoundingClientRect(), cvR=cv.getBoundingClientRect();
+  const b=markBoundsN(mark,cw,chh,ctx);
+  const scrX=cvR.left-stageR.left+b.x0*cw*V.s+V.x, scrY=cvR.top-stageR.top+b.y0*chh*V.s+V.y;
+  const scrW=Math.max(20,(b.x1-b.x0)*cw*V.s), scrH=Math.max(20,(b.y1-b.y0)*chh*V.s);
+  const px=photoTextPx(mark,cw)*V.s;
+  FE.innerHTML="";
+  const field=document.createElement("textarea");
+  field.value=mark.text||"";
+  field.rows=Math.max(2,Math.round(scrH/(px*1.3)));
+  field.style.width=Math.max(160,scrW+40)+"px";
+  field.style.fontFamily=mark.font||"Arial";
+  field.style.fontSize=Math.max(11,Math.round(px))+"px";
+  field.style.fontWeight=mark.bold?"700":"400";
+  field.style.fontStyle=mark.italic?"italic":"normal";
+  field.style.color=mark.color||"#1b2530";
+  field.style.background=mark.fill||"#fff";
+  FE.appendChild(field);
+  const hintEl=document.createElement("div"); hintEl.className="fe-hint"; hintEl.textContent="Enter for new line — ✓ Done to finish";
+  FE.appendChild(hintEl);
+  const doneBtn=document.createElement("button");
+  doneBtn.textContent="✓ Done";
+  doneBtn.style.cssText="display:block;margin-top:5px;width:100%;padding:7px 0;border-radius:6px;border:0;background:#1f9d55;color:#fff;font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation";
+  FE.appendChild(doneBtn);
+  let done=false;
+  function finish(){
+    if(done) return; done=true;
+    FE.style.display="none"; FE.innerHTML=""; photoTextEditOpen=false;
+    const val=field.value, changed=(mark.text||"")!==val;
+    if(val.trim()===""){
+      if(changed||isNew) recordHistory();
+      const i=ph.strokes.indexOf(mark); if(i>=0) ph.strokes.splice(i,1);
+      photoSelMarks.delete(mark);
+    } else { if(changed) recordHistory(); mark.text=val; }
+    redrawAllPhotos(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar();
+  }
+  doneBtn.onpointerdown=(ev)=>{ ev.preventDefault(); finish(); };
+  field.onkeydown=(ev)=>{ if(ev.key==="Escape"){ ev.preventDefault(); finish(); } };
+  field.onblur=()=>finish();
+  FE.style.display="block"; FE.style.left="0px"; FE.style.top="0px";
+  requestAnimationFrame(()=>{
+    const fw=FE.offsetWidth, fh=FE.offsetHeight;
+    const left=Math.min(Math.max(6,scrX+scrW/2-fw/2), stageEl.clientWidth-fw-6);
+    const top=Math.min(Math.max(6,scrY-4), stageEl.clientHeight-fh-6);
+    FE.style.left=left+"px"; FE.style.top=top+"px";
+  });
+  field.focus(); if(field.select) field.select();
+}
+
 function renderPhotos(){
   const scroll=byId("photoScroll");
+  // clearing the pane zeroes scrollTop; card heights are set synchronously from the canvas
+  // size, so putting it back after the rebuild keeps undo/delete from jumping to the top
+  const keepTop=scroll.scrollTop;
   scroll.innerHTML="";
+  photoCardW=photoCardWidth();
   photoRedraws.clear();                       // the old cards' closures are dead
   const live=new Set((P.photos||[]).map(p=>p.id));
   [...photoImgCache.keys()].forEach(k=>{ if(!live.has(k)) photoImgCache.delete(k); });
+  [...photoCardInfo.keys()].forEach(k=>{ if(!live.has(k)) photoCardInfo.delete(k); });
   if(!P.photos.length){
-    scroll.innerHTML=`<div class="photo-empty">No photos yet — click “Add photos” to import.</div>`;
+    scroll.innerHTML=`<div class="photo-empty">No photos yet — use “Take photo” or “Add photos”.</div>`;
     return;
   }
   P.photos.forEach((ph,idx)=>{
-    if(!ph.strokes) ph.strokes=[];
+    ensurePhotoMarks(ph);
     if(!ph._view) ph._view={s:1,x:0,y:0};
     const card=document.createElement("div"); card.className="photo-card";
-    const maxW=520, scale=Math.min(1,maxW/ph.w);
-    const cw=Math.round(ph.w*scale), chh=Math.round(ph.h*scale);
+    // Always the full column width — clamping to the photo's own size is what left the
+    // gap. Callout text is sized off cw (photoTextPx), so it follows automatically.
+    const cw=photoCardW, chh=Math.max(1,Math.round(ph.h*(cw/ph.w)));
     const cv=document.createElement("canvas"); cv.width=cw; cv.height=chh;
     card.appendChild(cv);
     const bar=document.createElement("div"); bar.className="pc-bar";
@@ -4953,6 +6032,7 @@ function renderPhotos(){
     scroll.appendChild(card);
 
     const V=ph._view;
+    photoCardInfo.set(ph.id,{cv,V,cw,chh});
     function clampView(){
       V.s=Math.max(1,Math.min(8,V.s));
       const minX=cw-cw*V.s, minY=chh-chh*V.s;
@@ -4988,26 +6068,72 @@ function renderPhotos(){
       if(imLoaded) pctx.drawImage(im,0,0,cw,chh);
       drawPhotoMarks(pctx,ph,cw,chh,cursor);
       if(linePreview){
-        pctx.save();pctx.strokeStyle=photoPen.color;pctx.lineWidth=(photoPen.width)/1;pctx.setLineDash([6/V.s,4/V.s]);pctx.lineCap="round";
+        const lst=photoToolStyle[photoTool==="polygon"?"polygon":"line"];
+        pctx.save();pctx.strokeStyle=lst.color;pctx.lineWidth=photoStrokePx(lst.width,cw);pctx.setLineDash([6/V.s,4/V.s]);pctx.lineCap="round";
         pctx.beginPath();pctx.moveTo(linePreview.from.x*cw,linePreview.from.y*chh);pctx.lineTo(linePreview.to.x*cw,linePreview.to.y*chh);pctx.stroke();pctx.restore();
       }
-      // selection highlight + marquee
-      if(photoTool==="select"){
-        for(const st of ph.strokes){ if(photoSelMarks.has(st)){
-          const b=markBoundsN(st,cw,chh,pctx);
-          pctx.save();pctx.strokeStyle="#2b7fd0";pctx.lineWidth=1.5/V.s;pctx.setLineDash([5/V.s,4/V.s]);
-          pctx.strokeRect(b.x0*cw-4/V.s,b.y0*chh-4/V.s,(b.x1-b.x0)*cw+8/V.s,(b.y1-b.y0)*chh+8/V.s);pctx.restore();
-          // draggable vertex handles for pen/line
-          if((st.type||"pen")!=="text" && st.pts){
+      // live previews for drag-to-draw shapes and the callout leader/text box
+      if(shapeDown && shapePreview){
+        const st=photoToolStyle[photoTool];
+        const pv={type:photoTool,color:st.color,width:st.width,opacity:.7,dash:st.dash,
+                  pts:[{x:shapeDown.x,y:shapeDown.y},{x:shapePreview.x,y:shapePreview.y}]};
+        if(photoTool==="arrow") pv.heads=st.heads; else pv.fill=st.fill;
+        paintPhotoMark(pctx,pv,cw,chh);
+      }
+      if(calloutDown && calloutPreview){
+        pctx.save();pctx.strokeStyle=photoTextStyle.color;pctx.lineWidth=photoStrokePx(3,cw);pctx.setLineDash([6/V.s,4/V.s]);
+        pctx.beginPath();pctx.moveTo(calloutDown.x*cw,calloutDown.y*chh);pctx.lineTo(calloutPreview.x*cw,calloutPreview.y*chh);pctx.stroke();pctx.restore();
+      }
+      if(textDown && textPreview){
+        pctx.save();pctx.strokeStyle="#2b7fd0";pctx.lineWidth=1.5/V.s;pctx.setLineDash([5/V.s,4/V.s]);
+        pctx.strokeRect(Math.min(textDown.p.x,textPreview.x)*cw, Math.min(textDown.p.y,textPreview.y)*chh,
+                         Math.abs(textPreview.x-textDown.p.x)*cw, Math.abs(textPreview.y-textDown.p.y)*chh);
+        pctx.restore();
+      }
+      // eraser cursor ring, while hovering or dragging
+      if(photoTool==="eraser"){
+        const cp=(eraseDrag&&eraseDrag.cursor)||eraseHoverP;
+        if(cp){
+          const r=(photoToolStyle.eraser.size/2)/V.s;
+          pctx.save();pctx.strokeStyle="#e01b24";pctx.lineWidth=1.5/V.s;pctx.setLineDash([4/V.s,3/V.s]);
+          pctx.beginPath();pctx.arc(cp.x*cw,cp.y*chh,r,0,7);pctx.stroke();pctx.restore();
+        }
+      }
+      // selection: dashed bbox per selected mark, plus reshape handles when exactly one is selected
+      for(const st of ph.strokes){
+        if(!photoSelMarks.has(st)) continue;
+        const b=markBoundsN(st,cw,chh,pctx);
+        pctx.save();pctx.strokeStyle="#2b7fd0";pctx.lineWidth=1.5/V.s;pctx.setLineDash([5/V.s,4/V.s]);
+        pctx.strokeRect(b.x0*cw-4/V.s,b.y0*chh-4/V.s,(b.x1-b.x0)*cw+8/V.s,(b.y1-b.y0)*chh+8/V.s);pctx.restore();
+      }
+      if(photoSelMarks.size===1){
+        const st=[...photoSelMarks][0];
+        if(ph.strokes.includes(st)){
+          const type=st.type||"pen";
+          if(type!=="text"){
+            const bb=markPtsBoundsN(st.pts||[]);
             pctx.save();
-            for(const v of st.pts){
-              pctx.beginPath();pctx.arc(v.x*cw,v.y*chh,5/V.s,0,7);
-              pctx.fillStyle="#fff";pctx.strokeStyle="#2b7fd0";pctx.lineWidth=2/V.s;
-              pctx.fill();pctx.stroke();
+            for(const hid of BBOX_HANDLE_IDS){
+              const hp=bboxHandlePos(bb,hid);
+              pctx.beginPath();pctx.rect(hp.x*cw-4/V.s,hp.y*chh-4/V.s,8/V.s,8/V.s);
+              pctx.fillStyle="#fff";pctx.strokeStyle="#2b7fd0";pctx.lineWidth=1.5/V.s;pctx.fill();pctx.stroke();
             }
             pctx.restore();
+            if(type==="line"||type==="polygon"||type==="arrow"){
+              pctx.save();
+              for(const v of (st.pts||[])){
+                pctx.beginPath();pctx.arc(v.x*cw,v.y*chh,5/V.s,0,7);
+                pctx.fillStyle="#fff";pctx.strokeStyle="#2b7fd0";pctx.lineWidth=2/V.s;pctx.fill();pctx.stroke();
+              }
+              pctx.restore();
+            }
+          } else if(st.tip){
+            pctx.save();
+            pctx.beginPath();pctx.arc(st.tip.x*cw,st.tip.y*chh,5/V.s,0,7);
+            pctx.fillStyle="#fff";pctx.strokeStyle="#2b7fd0";pctx.lineWidth=2/V.s;pctx.fill();pctx.stroke();
+            pctx.restore();
           }
-        }}
+        }
       }
       if(marq && marq.ph===ph){
         pctx.save();pctx.strokeStyle="#2b7fd0";pctx.fillStyle="rgba(43,127,208,.12)";pctx.lineWidth=1/V.s;
@@ -5032,14 +6158,23 @@ function renderPhotos(){
       return {x:(ev.clientX-r.left)*(r.width?cw/r.width:1), y:(ev.clientY-r.top)*(r.height?chh/r.height:1)};
     }
 
-    let penStroke=null, selDrag=null, marq=null, movedFlag=false, vtxDrag=null;
+    let penStroke=null, selDrag=null, marq=null, movedFlag=false, handleDrag=null;
     let lineDown=null, linePreview=null;
+    let shapeDown=null, shapePreview=null;
+    let calloutDown=null, calloutPreview=null;
+    let textDown=null, textPreview=null;
+    let eraseDrag=null, eraseHoverP=null;
     const cpts=new Map(); let cgest=null;
+    const JUST_DRAWN_TOOLS={select:1,rect:1,ellipse:1,arrow:1,polygon:1,callout:1};
+    function abortCardGesture(){
+      penStroke=null; selDrag=null; handleDrag=null; marq=null; lineDown=null; linePreview=null;
+      shapeDown=null; shapePreview=null; calloutDown=null; calloutPreview=null; textDown=null; textPreview=null; eraseDrag=null;
+    }
     cv.addEventListener("pointerdown",ev=>{
       if(ev.pointerType==="touch"){
         cpts.set(ev.pointerId,posCanvas(ev));
         if(cpts.size===2){
-          penStroke=null; selDrag=null; vtxDrag=null; marq=null; lineDown=null; linePreview=null;  // abort single-finger action
+          abortCardGesture();  // second finger: make way for pan/zoom, no half-finished mark left behind
           const a=[...cpts.values()];
           cgest={d:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1,c:{x:(a[0].x+a[1].x)/2,y:(a[0].y+a[1].y)/2},s0:V.s,x0:V.x,y0:V.y};
           redrawPhoto(); return;
@@ -5048,37 +6183,55 @@ function renderPhotos(){
       }
       if(cgest) return;
       const p=pos(ev);
+      // a just-drawn/selected mark's handle takes priority over starting something new
+      if(JUST_DRAWN_TOOLS[photoTool] && photoSelMarks.size===1){
+        const hh=photoHandleHit(ph,p,cw,chh,V.s,ev.pointerType);
+        if(hh){ cv.setPointerCapture(ev.pointerId); handleDrag=hh; movedFlag=false; return; }
+      }
       if(photoTool==="select"){
         cv.setPointerCapture(ev.pointerId);
-        // grab a vertex handle of an already-selected line/pen first
-        const vh=photoVertexHit(ph,p,cw,chh,V.s,ev.pointerType);
-        if(vh){ vtxDrag=vh; movedFlag=false; return; }
-        // topmost mark under cursor
         let hit=null;
         for(let i=ph.strokes.length-1;i>=0;i--){ if(markHitN(ph.strokes[i],p,cw,chh,pctx)){ hit=ph.strokes[i]; break; } }
         if(hit){
+          const wasSole = photoSelMarks.size===1 && photoSelMarks.has(hit) && !ev.shiftKey;
           if(ev.shiftKey){ if(photoSelMarks.has(hit)) photoSelMarks.delete(hit); else photoSelMarks.add(hit); }
           else if(!photoSelMarks.has(hit)){ photoSelMarks.clear(); photoSelMarks.add(hit); }
-          selDrag={last:p}; movedFlag=false;
+          selDrag={last:p,tapMark:hit,wasSole}; movedFlag=false;
         } else {
           if(!ev.shiftKey) photoSelMarks.clear();
           marq={ph,x0:p.x,y0:p.y,x1:p.x,y1:p.y};
         }
-        renderPhotosSelOnly(); redrawPhoto();
+        updatePhotoSelBar(); buildPhotoOptbar(); redrawPhoto();
         return;
       }
-      if(photoTool==="pen"){
+      if(photoTool==="pen"||photoTool==="highlight"){
         cv.setPointerCapture(ev.pointerId);
-        penStroke={type:"pen",color:photoPen.color,width:photoPen.width,pts:[p]};
+        const st=photoToolStyle[photoTool];
+        penStroke={type:photoTool,id:uid(),color:st.color,width:st.width,opacity:st.opacity,pts:[p]};
         ph.strokes.push(penStroke);
-      } else if(photoTool==="line"){
+      } else if(photoTool==="line"||photoTool==="polygon"){
+        if(photoTool==="polygon") photoSelMarks.clear();
         if(photoLine && photoLine.ph!==ph) cancelPhotoLine();
         lineDown={x:p.x,y:p.y};   // commit on lift (so a pinch never adds a point)
         linePreview=null;
+      } else if(photoTool==="rect"||photoTool==="ellipse"||photoTool==="arrow"){
+        photoSelMarks.clear();   // release any just-drawn mark; this pointerdown starts a new one
+        cv.setPointerCapture(ev.pointerId);
+        shapeDown={x:p.x,y:p.y,shift:ev.shiftKey};
+      } else if(photoTool==="callout"){
+        photoSelMarks.clear();
+        cv.setPointerCapture(ev.pointerId);
+        calloutDown={x:p.x,y:p.y};
+      } else if(photoTool==="eraser"){
+        cv.setPointerCapture(ev.pointerId);
+        const radiusPx=photoToolStyle.eraser.size/2/V.s;
+        eraseDrag={changed:false,radiusPx,cursor:p};
+        if(photoEraseAt(ph,p,radiusPx,cw,chh)) eraseDrag.changed=true;
+        redrawPhoto();
       } else if(photoTool==="text"){
         const hit=photoTextAt(ph,p,cw,chh,pctx);
-        if(hit){ const t=prompt("Edit callout text:",hit.text); if(t!=null){ if(t.trim()===""){ recordHistory(); ph.strokes.splice(ph.strokes.indexOf(hit),1);} else { recordHistory(); hit.text=t; } redrawPhoto(); saveLocal(); } return; }
-        const t=prompt("Callout text:",""); if(t&&t.trim()){ recordHistory(); ph.strokes.push({type:"text",color:photoPen.color,size:photoTextSize,x:p.x,y:p.y,text:t.trim()}); redrawPhoto(); saveLocal(); }
+        const wasSole = hit && photoSelMarks.size===1 && photoSelMarks.has(hit);
+        textDown={p,existingHit:hit,wasSole};
       }
     });
     cv.addEventListener("pointermove",ev=>{
@@ -5094,38 +6247,69 @@ function renderPhotos(){
       }
       if(cgest) return;
       const p=pos(ev);
-      if(vtxDrag){ vtxDrag.mark.pts[vtxDrag.idx]={x:Math.max(0,Math.min(1,p.x)),y:Math.max(0,Math.min(1,p.y))}; movedFlag=true; redrawPhoto(); return; }
+      if(handleDrag){
+        if(handleDrag.kind==="vertex"){ handleDrag.mark.pts[handleDrag.idx]={x:Math.max(0,Math.min(1,p.x)),y:Math.max(0,Math.min(1,p.y))}; }
+        else if(handleDrag.kind==="bbox"){ scaleMarkByHandle(handleDrag.mark,handleDrag.handle,p,ev.shiftKey); }
+        else if(handleDrag.kind==="tip"){ handleDrag.mark.tip={x:Math.max(0,Math.min(1,p.x)),y:Math.max(0,Math.min(1,p.y))}; }
+        movedFlag=true; redrawPhoto(); return;
+      }
       if(selDrag){ const dx=p.x-selDrag.last.x, dy=p.y-selDrag.last.y; selDrag.last=p; if(dx||dy){ movedFlag=true; photoSelMarks.forEach(m=>translateMarkN(m,dx,dy)); redrawPhoto(); } return; }
       if(marq){ marq.x1=p.x; marq.y1=p.y; redrawPhoto(); return; }
-      if(penStroke){ penStroke.pts.push(p); redrawPhoto(); }
-      else if(lineDown && photoTool==="line"){
+      if(penStroke){ penStroke.pts.push(p); redrawPhoto(); return; }
+      if(lineDown && (photoTool==="line"||photoTool==="polygon")){
         const anchor=(photoLine && photoLine.ph===ph && photoLine.mark.pts.length)?photoLine.mark.pts[photoLine.mark.pts.length-1]:lineDown;
-        linePreview={from:anchor,to:p}; redrawPhoto();
+        linePreview={from:anchor,to:p}; redrawPhoto(); return;
       }
-      else if(photoLine && photoLine.ph===ph){ redrawPhoto(p); }
+      if(photoLine && photoLine.ph===ph){ redrawPhoto(p); return; }
+      if(shapeDown){
+        let to={x:p.x,y:p.y};
+        if(shapeDown.shift){
+          const dx=to.x-shapeDown.x, dy=to.y-shapeDown.y;
+          if(photoTool==="arrow"){
+            const ang=Math.round(Math.atan2(dy,dx)/(Math.PI/4))*(Math.PI/4), d=Math.hypot(dx,dy);
+            to={x:shapeDown.x+Math.cos(ang)*d,y:shapeDown.y+Math.sin(ang)*d};
+          } else {
+            const s=Math.max(Math.abs(dx),Math.abs(dy));
+            to={x:shapeDown.x+(dx<0?-s:s),y:shapeDown.y+(dy<0?-s:s)};
+          }
+        }
+        shapePreview=to; redrawPhoto(); return;
+      }
+      if(calloutDown){ calloutPreview={x:p.x,y:p.y}; redrawPhoto(); return; }
+      if(textDown){ textPreview={x:p.x,y:p.y}; redrawPhoto(); return; }
+      if(eraseDrag){ eraseDrag.cursor=p; if(photoEraseAt(ph,p,eraseDrag.radiusPx,cw,chh)) eraseDrag.changed=true; redrawPhoto(); return; }
+      if(photoTool==="eraser"){ eraseHoverP=p; redrawPhoto(); return; }
     });
     cv.addEventListener("pointerup",ev=>{
       if(ev && ev.pointerType==="touch"){
         cpts.delete(ev.pointerId);
         if(cgest){ if(cpts.size<2) cgest=null; return; }
       }
-      if(vtxDrag){ if(movedFlag){ recordHistory(); saveLocal(); } vtxDrag=null; return; }
-      if(selDrag){ if(movedFlag){ recordHistory(); saveLocal(); } selDrag=null; return; }
+      if(handleDrag){ if(movedFlag) recordHistory(); handleDrag=null; if(movedFlag){ saveLocal(); redrawAllPhotos(); } return; }
+      if(selDrag){
+        if(movedFlag){ recordHistory(); saveLocal(); }
+        else if(selDrag.wasSole && (selDrag.tapMark.type||"pen")==="text"){
+          openPhotoTextEditor(ph,selDrag.tapMark,cv,V,cw,chh,false);
+        }
+        selDrag=null; updatePhotoSelBar(); buildPhotoOptbar(); return;
+      }
       if(marq){
         const x0=Math.min(marq.x0,marq.x1),y0=Math.min(marq.y0,marq.y1),x1=Math.max(marq.x0,marq.x1),y1=Math.max(marq.y0,marq.y1);
         if(Math.abs(x1-x0)>0.005||Math.abs(y1-y0)>0.005){
           for(const st of ph.strokes){ const b=markBoundsN(st,cw,chh,pctx); if(b.x1>=x0&&b.x0<=x1&&b.y1>=y0&&b.y0<=y1) photoSelMarks.add(st); }
         }
-        marq=null; redrawPhoto(); updatePhotoSelBar(); return;
+        marq=null; redrawPhoto(); updatePhotoSelBar(); buildPhotoOptbar(); return;
       }
       if(penStroke){ penStroke=null; recordHistory(); saveLocal(); return; }
-      if(lineDown && photoTool==="line"){
+      if(lineDown && (photoTool==="line"||photoTool==="polygon")){
         const up=pos(ev);
         const moved=Math.hypot(up.x-lineDown.x, up.y-lineDown.y);
         if(!photoLine || photoLine.ph!==ph){
-          // start a fresh line at the down point; a drag also drops the end point
-          const m={type:"line",color:photoPen.color,width:photoPen.width,pts:[{x:lineDown.x,y:lineDown.y}]};
-          ph.strokes.push(m); photoLine={ph,mark:m,redraw:redrawPhoto};
+          // start a fresh line/polygon at the down point; a drag also drops the end point
+          const st=photoToolStyle[photoTool];
+          const m={type:photoTool,id:uid(),color:st.color,width:st.width,opacity:st.opacity,dash:st.dash,pts:[{x:lineDown.x,y:lineDown.y}]};
+          if(photoTool==="polygon") m.fill=st.fill;
+          ph.strokes.push(m); photoLine={ph,mark:m,redraw:redrawPhoto,closed:photoTool==="polygon"};
           if(moved>0.012) m.pts.push({x:up.x,y:up.y});
         } else {
           // continuing: connect to the new point (works for both a tap and a drag-out)
@@ -5135,18 +6319,99 @@ function renderPhotos(){
         updatePhotoLineBar(); redrawPhoto();
         return;
       }
+      if(shapeDown){
+        const from={x:shapeDown.x,y:shapeDown.y};
+        const to=shapePreview||from;
+        const dragDist=Math.hypot(to.x-from.x,to.y-from.y);
+        shapeDown=null; shapePreview=null;
+        if(dragDist>0.012){
+          recordHistory();
+          const st=photoToolStyle[photoTool];
+          const m={type:photoTool,id:uid(),color:st.color,width:st.width,opacity:st.opacity,dash:st.dash,pts:[from,to]};
+          if(photoTool==="arrow") m.heads=st.heads; else m.fill=st.fill;
+          ph.strokes.push(m); photoSelMarks=new Set([m]); saveLocal();
+          updatePhotoSelBar(); buildPhotoOptbar();
+        }
+        redrawPhoto();
+        return;
+      }
+      if(calloutDown){
+        const tip={x:calloutDown.x,y:calloutDown.y};
+        const to=calloutPreview||tip;
+        const dragDist=Math.hypot(to.x-tip.x,to.y-tip.y);
+        calloutDown=null; calloutPreview=null;
+        if(dragDist>0.012){
+          recordHistory();
+          const st=photoTextStyle;
+          const m={type:"text",id:uid(),opacity:1,x:to.x,y:to.y,w:null,text:"",
+                   font:st.font,size:st.size,bold:st.bold,italic:st.italic,color:st.color,fill:st.fill,border:st.border,tip};
+          ph.strokes.push(m); photoSelMarks=new Set([m]); saveLocal();
+          updatePhotoSelBar(); buildPhotoOptbar();
+          openPhotoTextEditor(ph,m,cv,V,cw,chh,true);
+        }
+        redrawPhoto();
+        return;
+      }
+      if(textDown){
+        const start=textDown.p, existingHit=textDown.existingHit, wasSole=textDown.wasSole;
+        const to=textPreview||start;
+        const dragDist=Math.hypot(to.x-start.x,to.y-start.y);
+        textDown=null; textPreview=null;
+        if(dragDist<=0.012){
+          if(existingHit){
+            // tapping an existing box selects it; a second tap while it's already the sole
+            // selection opens the editor (matches Select's two-tap pattern)
+            if(wasSole){ openPhotoTextEditor(ph,existingHit,cv,V,cw,chh,false); }
+            else { photoSelMarks=new Set([existingHit]); updatePhotoSelBar(); buildPhotoOptbar(); }
+          }
+          else {
+            recordHistory();
+            const st=photoTextStyle;
+            const m={type:"text",id:uid(),opacity:1,x:start.x,y:start.y,w:null,text:"",
+                     font:st.font,size:st.size,bold:st.bold,italic:st.italic,color:st.color,fill:st.fill,border:st.border};
+            ph.strokes.push(m); photoSelMarks=new Set([m]); saveLocal();
+            updatePhotoSelBar(); buildPhotoOptbar();
+            openPhotoTextEditor(ph,m,cv,V,cw,chh,true);
+          }
+        } else {
+          recordHistory();
+          const x=Math.min(start.x,to.x), y=Math.min(start.y,to.y);
+          const ww=Math.max(60/cw, Math.abs(to.x-start.x));   // keep the Diagram's 60px-equivalent minimum
+          const st=photoTextStyle;
+          const m={type:"text",id:uid(),opacity:1,x,y,w:ww,text:"",
+                   font:st.font,size:st.size,bold:st.bold,italic:st.italic,color:st.color,fill:st.fill,border:st.border};
+          ph.strokes.push(m); photoSelMarks=new Set([m]); saveLocal();
+          updatePhotoSelBar(); buildPhotoOptbar();
+          openPhotoTextEditor(ph,m,cv,V,cw,chh,true);
+        }
+        redrawPhoto();
+        return;
+      }
+      if(eraseDrag){ if(eraseDrag.changed){ recordHistory(); saveLocal(); } eraseDrag=null; redrawPhoto(); return; }
     });
-    cv.addEventListener("pointerleave",()=>{ if(penStroke){ penStroke=null; recordHistory(); saveLocal(); } if(vtxDrag){ if(movedFlag){recordHistory();saveLocal();} vtxDrag=null; } if(selDrag){ if(movedFlag){recordHistory();saveLocal();} selDrag=null; } if(marq){ marq=null; redrawPhoto(); } if(lineDown){ lineDown=null; linePreview=null; redrawPhoto(); } });
-    cv.addEventListener("pointercancel",ev=>{ if(ev&&cpts.has(ev.pointerId)){ cpts.delete(ev.pointerId); if(cgest&&cpts.size<2) cgest=null; } penStroke=null;selDrag=null;vtxDrag=null;lineDown=null;linePreview=null; });
+    cv.addEventListener("pointerleave",()=>{
+      eraseHoverP=null;
+      if(penStroke){ penStroke=null; recordHistory(); saveLocal(); }
+      if(handleDrag){ if(movedFlag){recordHistory();saveLocal();} handleDrag=null; }
+      if(selDrag){ if(movedFlag){recordHistory();saveLocal();} selDrag=null; }
+      if(marq){ marq=null; redrawPhoto(); }
+      if(lineDown){ lineDown=null; linePreview=null; redrawPhoto(); }
+      if(shapeDown){ shapeDown=null; shapePreview=null; redrawPhoto(); }
+      if(calloutDown){ calloutDown=null; calloutPreview=null; redrawPhoto(); }
+      if(textDown){ textDown=null; textPreview=null; redrawPhoto(); }
+      if(eraseDrag){ if(eraseDrag.changed){recordHistory();saveLocal();} eraseDrag=null; redrawPhoto(); }
+    });
+    cv.addEventListener("pointercancel",ev=>{
+      if(ev&&cpts.has(ev.pointerId)){ cpts.delete(ev.pointerId); if(cgest&&cpts.size<2) cgest=null; }
+      abortCardGesture();
+    });
     cv.addEventListener("dblclick",(ev)=>{
-      if(photoTool==="line" && photoLine && photoLine.ph===ph){ finishPhotoLine(); return; }
-      // double-tap a callout with Select to edit it, without switching tools
+      if((photoTool==="line"||photoTool==="polygon") && photoLine && photoLine.ph===ph){ finishPhotoLine(); return; }
+      // double-tap a text box with Select to edit it, without switching tools
       if(photoTool==="select"){
         const p=pos(ev);
-        for(let i=ph.strokes.length-1;i>=0;i--){
-          const st=ph.strokes[i];
-          if((st.type||"pen")==="text" && markHitN(st,p,cw,chh,pctx)){ editPhotoText(st); return; }
-        }
+        const hit=photoTextAt(ph,p,cw,chh,pctx);
+        if(hit){ photoSelMarks=new Set([hit]); updatePhotoSelBar(); buildPhotoOptbar(); openPhotoTextEditor(ph,hit,cv,V,cw,chh,false); }
       }
     });
     cv.style.cursor = photoTool==="select" ? "default" : "crosshair";
@@ -5156,26 +6421,22 @@ function renderPhotos(){
     bar.querySelector("[data-zfit]").onclick=()=>{ V.s=1;V.x=0;V.y=0; redrawPhoto(); };
 
     bar.querySelector("[data-undo]").onclick=()=>{ if(photoLine&&photoLine.ph===ph) cancelPhotoLine(); else if(ph.strokes.length){ recordHistory(); ph.strokes.pop(); redrawPhoto(); saveLocal(); } };
-    bar.querySelector("[data-clear]").onclick=()=>{ cancelPhotoLine(); if(ph.strokes.length){ recordHistory(); ph.strokes=[]; redrawPhoto(); saveLocal(); } };
+    bar.querySelector("[data-clear]").onclick=()=>{ cancelPhotoLine(); if(ph.strokes.length){ recordHistory(); ph.strokes=[]; photoSelMarks.clear(); redrawPhoto(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar(); } };
     bar.querySelector("[data-del]").onclick=()=>{ cancelPhotoLine(); recordHistory(); P.photos.splice(idx,1); renderPhotos(); saveLocal(); };
 
     // Paint now if the image was already decoded. This runs last because
-    // redrawPhoto() reads `marq` / `linePreview`, which are declared above but
-    // only initialised further down — calling it any earlier hits their TDZ.
+    // redrawPhoto() reads state declared above but only initialised further down —
+    // calling it any earlier hits their TDZ.
     if(imLoaded) redrawPhoto();
   });
+  scroll.scrollTop=keepTop;
 }
-// lightweight: re-highlight selection across all cards without full rebuild
-function renderPhotosSelOnly(){ /* per-card redraw draws the highlight; just refresh the action bar */ updatePhotoSelBar(); }
-// hit-test a text callout on a photo (normalized coords)
+// hit-test a text/callout mark on a photo (normalized coords) — thin wrapper over markHitN
 function photoTextAt(ph,p,cw,chh,pctx){
   for(let i=ph.strokes.length-1;i>=0;i--){
-    const st=ph.strokes[i]; if((st.type||"")!=="text") continue;
-    const fs=photoTextPx(st,cw);
-    pctx.save();pctx.font="700 "+fs+"px Arial";const tw=pctx.measureText(st.text||"").width;pctx.restore();
-    const x0=st.x*cw, y0=st.y*chh;
-    const px=p.x*cw, py=p.y*chh;
-    if(px>=x0-6&&px<=x0+tw+6&&py>=y0-6&&py<=y0+fs+6) return st;
+    const st=ph.strokes[i];
+    if((st.type||"pen")!=="text") continue;
+    if(markHitN(st,p,cw,chh,pctx)) return st;
   }
   return null;
 }
@@ -5244,7 +6505,7 @@ function absorbPhotoBlobs(d){
   (P.photos||[]).forEach(p=>{
     if(!p.id) p.id=newPhotoId();
     if(p.dataUrl){ putBlob(p.id,p.dataUrl); delete p.dataUrl; }
-    if(!p.strokes) p.strokes=[];
+    ensurePhotoMarks(p);   // back-fills type/id/opacity and migrates legacy text — the migration hook
   });
   const ti=P.meta && P.meta.titleImage;
   if(ti && /^data:/.test(ti)){          // legacy: the blob was stored inline on meta
@@ -5274,6 +6535,7 @@ function applyLoaded(d){
     optSeq=2; activeOpt=0;
   }
   absorbPhotoBlobs(d);
+  if(typeof photoSelMarks!=="undefined" && photoSelMarks) photoSelMarks.clear();   // loading a job invalidates any old mark references
   nextId=(d&&d.nextId) || (OPTIONS.reduce((m,o)=>Math.max(m,(o.objects||[]).reduce((mm,x)=>Math.max(mm,x.id||0),0)),0)+1);
   if(d&&d.stampPresets&&d.stampPresets.length){ stampPresets.length=0; d.stampPresets.forEach(s=>stampPresets.push(s)); activeStamp=stampPresets[0]; }
   const o=OPTIONS[activeOpt];
@@ -5382,24 +6644,9 @@ async function photoSnapshot(ph){
     im.onload=()=>{
       const c=document.createElement("canvas"); c.width=ph.w; c.height=ph.h;
       const cx=c.getContext("2d"); cx.drawImage(im,0,0);
-      const pscale=ph.w/520;   // strokes/text are authored against a ~520px preview; scale up to full res so they aren't hairline-thin in the PDF
-      for(const st of (ph.strokes||[])){
-        const type=st.type||"pen";
-        if(type==="text"){
-          const fs=photoTextPx(st,ph.w);   // scale to the full-res photo, matching on-screen proportions
-          cx.save();cx.font="700 "+fs+"px Arial";cx.textBaseline="top";
-          const tx=st.x*ph.w, ty=st.y*ph.h, tw=cx.measureText(st.text||"").width;
-          cx.fillStyle="rgba(255,255,255,.85)";roundRect(cx,tx-6,ty-4,tw+12,fs+8,5);cx.fill();
-          cx.strokeStyle=st.color||"#e01b24";cx.lineWidth=2*pscale;cx.stroke();
-          cx.fillStyle=st.color||"#e01b24";cx.fillText(st.text||"",tx,ty);cx.restore();
-          continue;
-        }
-        if(!st.pts||!st.pts.length)continue;
-        cx.save();cx.strokeStyle=st.color;cx.lineWidth=(st.width||7)*pscale;cx.lineCap="round";cx.lineJoin="round";
-        cx.beginPath();cx.moveTo(st.pts[0].x*ph.w,st.pts[0].y*ph.h);
-        for(let i=1;i<st.pts.length;i++)cx.lineTo(st.pts[i].x*ph.w,st.pts[i].y*ph.h);
-        cx.stroke();cx.restore();
-      }
+      // paintPhotoMark scales everything by cw/PHOTO_REF_W itself — pass the full-res
+      // photo width so marks print at the same proportions they show on screen.
+      for(const st of (ph.strokes||[])) paintPhotoMark(cx,st,ph.w,ph.h);
       res(c.toDataURL("image/jpeg",0.82));
     };
     im.onerror=()=>res("");
@@ -5695,11 +6942,12 @@ async function refreshPdfView(){
   if(seq!==pdfSeq || curPage!=="pdf") return;
   pdfLastHTML=html;
   // native answers with pdfNativeDone / pdfNativeError; buttons stay disabled until the PDF exists
-  if(pdfNative({action:"build", seq, html, name:pdfFileName(), rect:pdfHostRect(), hidden:pdfModalOpen()})) return;
+  if(pdfNative({action:"build", seq, html, name:pdfFileName(), rect:pdfHostRect(), hidden:pdfModalOpen(),
+                sigs:sigList().map(sg=>({id:sg.id, page:sg.page, x:sg.x, y:sg.y, w:SIG_W, h:SIG_H, png:sigCardPNG(sg)}))})) return;
   let fr=host.querySelector("iframe");
   if(!fr){ fr=document.createElement("iframe"); fr.title="Estimate preview"; host.appendChild(fr); }
   fr.srcdoc=html;
-  setPdfStatus("Browser preview — page breaks show when printed");
+  setPdfStatus("Browser preview — page breaks show when printed"+(sigList().length?"; signatures are placed in the iPad app":""));
 }
 window.pdfNativeDone=(seq,pages)=>{ if(seq===pdfSeq) setPdfStatus(pages+" page"+(pages===1?"":"s")); };
 window.pdfNativeError=(seq,msg)=>{ if(seq===pdfSeq){ pdfLastHTML=""; setPdfStatus("PDF failed: "+msg); } };
@@ -5712,6 +6960,123 @@ function pdfExport(action){
   setTimeout(()=>{ try{win.focus();win.print();}catch(e){} },350);
 }
 byId("pdfRefresh").onclick=()=>refreshPdfView();
+byId("pdfSign").onclick=()=>openSignModal();
+
+/* ---------- SIGNATURES ----------
+   Customer and rep sign on a white pad; the card is placed on the native PDF as an annotation
+   the rep can press-and-hold to drag anywhere (WebView.swift), and Share/Print flatten it in.
+   P.meta.signatures = [{id, role, name, date, strokes, page, x, y, w, h}] — shared across
+   options like the customer. Ink is vector (normalized 0..1 on the pad), so it's tiny and never
+   needs the photo-blob treatment. page/x/y/w/h are PDF points on a 612×792 Letter page, TOP-left
+   origin; page:null (no longer created, still honoured) = native centres it on the page in view
+   and reports back through pdfSigMoved(). One per role — re-signing keeps the position. */
+/* The card is sized for the band UNDER page 1's footer: measured in the simulator's renderPDF,
+   the footer's last line ends at ~735pt of 792, and page 1 always adds up to PDF_BUDGET_H (the
+   diagram box absorbs the rest), so that band is the same on every job. 44pt + a 6pt gap each
+   side fills it; SIG_FOOT_Y is where a new signature lands — customer left, rep right. */
+const SIG_W=170, SIG_H=44, SIG_FOOT_Y=741;
+const SIG_INK={x:4,y:3,w:162,h:26};              // ink area inside the card
+const SIG_PAD_AR=3.5;                            // pad width/height — taller than the ink area so a finger can sign
+const SIG_ROLES={customer:"Customer",rep:"Rep"};
+function sigList(){ if(!Array.isArray(P.meta.signatures)) P.meta.signatures=[]; return P.meta.signatures; }
+function localISODate(){ const d=new Date(), z=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate()); }
+function paintSigInk(ctx,strokes,sx,sy,lw){
+  ctx.save(); ctx.strokeStyle="#12233a"; ctx.lineWidth=lw; ctx.lineCap="round"; ctx.lineJoin="round";
+  strokes.forEach(st=>{
+    if(!st.length) return;
+    ctx.beginPath();
+    // a tap is one point — paintSmoothPath would only moveTo it; a zero-length round-capped line draws the dot
+    if(st.length===1){ ctx.moveTo(sx(st[0]),sy(st[0])); ctx.lineTo(sx(st[0])+.01,sy(st[0])); }
+    else paintSmoothPath(ctx,st,sx,sy);
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+// the card exactly as it prints: white box, ink, baseline, "Name · Role · date". 4× for print.
+function sigCardPNG(sg){
+  const k=4, c=document.createElement("canvas"); c.width=SIG_W*k; c.height=SIG_H*k;
+  const g=c.getContext("2d"); g.scale(k,k);
+  g.fillStyle="#fff"; g.fillRect(0,0,SIG_W,SIG_H);
+  g.strokeStyle="#9aa6b1"; g.lineWidth=.6; g.strokeRect(.3,.3,SIG_W-.6,SIG_H-.6);
+  // crop to the ink and fit it (aspect kept, left-aligned) — the pad is taller than the ink
+  // area, and a signature written small in one corner of the pad would otherwise print tiny
+  const pts=(sg.strokes||[]).flat();
+  if(pts.length){
+    const xs=pts.map(p=>p.x*SIG_PAD_AR), ys=pts.map(p=>p.y);
+    const bx=Math.min(...xs), by=Math.min(...ys);
+    const bw=Math.max(.05,Math.max(...xs)-bx), bh=Math.max(.05,Math.max(...ys)-by);
+    const sc=Math.min(SIG_INK.w/bw, SIG_INK.h/bh);
+    const oy=SIG_INK.y+(SIG_INK.h-bh*sc)/2;
+    paintSigInk(g,sg.strokes,p=>SIG_INK.x+(p.x*SIG_PAD_AR-bx)*sc,p=>oy+(p.y-by)*sc,1.1);
+  }
+  g.strokeStyle="#5b6b7a"; g.lineWidth=.5; g.beginPath(); g.moveTo(4,31.5); g.lineTo(SIG_W-4,31.5); g.stroke();
+  g.fillStyle="#33455a"; g.font="6.5px Arial, Helvetica, sans-serif"; g.textBaseline="alphabetic";
+  // numeric date: the card is narrow, and a long customer name was truncating "September…"
+  const dm=/^(\d{4})-(\d{2})-(\d{2})/.exec(sg.date||""), dt=dm?(+dm[2])+"/"+(+dm[3])+"/"+dm[1]:"";
+  let nm=sg.name||""; const tail=[SIG_ROLES[sg.role]||"", dt].filter(Boolean).join("  ·  ");
+  const line=()=>[nm,tail].filter(Boolean).join("  ·  ");
+  while(nm.length>1 && g.measureText(line()).width>SIG_W-8) nm=nm.slice(0,-2)+"…";   // the name gives way, never the date
+  const t=line();
+  g.fillText(t,4,40);
+  return c.toDataURL("image/png");
+}
+window.pdfSigMoved=(id,page,x,y)=>{
+  const sg=sigList().find(s=>s.id===id); if(!sg) return;
+  sg.page=page; sg.x=x; sg.y=y; saveLocal();
+};
+function openSignModal(){
+  const has=r=>sigList().some(s=>s.role===r);
+  let role = has("customer") && !has("rep") ? "rep" : "customer";
+  let strokes=[], cur=null;
+  const nameFor=r=>{ const sg=sigList().find(s=>s.role===r); return sg ? sg.name : (r==="rep" ? P.meta.salesperson : P.meta.name)||""; };
+  openModal("Sign estimate",`
+    <div class="fld"><label>Who is signing</label><div class="seg-toggle" id="sgRole">${Object.keys(SIG_ROLES).map(r=>`<button data-r="${r}">${SIG_ROLES[r]}</button>`).join("")}</div></div>
+    <div class="fld"><label>Printed name</label><input id="sgName"></div>
+    <div class="fld"><label>Sign in the box</label>
+      <canvas id="sgPad" style="display:block;width:100%;aspect-ratio:${SIG_PAD_AR};background:#fff;border:1.5px solid #9aa6b1;border-radius:8px;touch-action:none;cursor:crosshair"></canvas></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+      <span id="sgMsg" style="flex:1;font-size:11.5px;color:var(--prime)"></span>
+      <button class="btn-sm" id="sgClear">Clear</button>
+      <button class="btn-sm" id="sgPlace" style="background:var(--prime);color:#fff;border-color:var(--prime)">Place on PDF</button></div>
+    <div id="sgList" style="margin-top:12px"></div>
+    <div class="note" style="margin-top:8px">A new signature lands under the footer on page 1. Press and hold it on the PDF, then drag to move it.</div>`);
+  const pad=byId("sgPad"), pctx=pad.getContext("2d"), dpr=window.devicePixelRatio||1;
+  pad.width=Math.round(pad.clientWidth*dpr); pad.height=Math.round(pad.clientHeight*dpr);
+  const redraw=()=>{ pctx.clearRect(0,0,pad.width,pad.height); paintSigInk(pctx,strokes,p=>p.x*pad.width,p=>p.y*pad.height,2.5*dpr); };
+  const setRole=r=>{
+    role=r; strokes=[]; redraw(); byId("sgName").value=nameFor(r); byId("sgMsg").textContent="";
+    byId("sgRole").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.r===r));
+  };
+  const renderList=()=>{
+    byId("sgList").innerHTML=sigList().map(sg=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line)">
+      <img src="${sigCardPNG(sg)}" style="width:100px;height:40px;border-radius:3px">
+      <span style="flex:1;font-size:12px"><b>${esc(SIG_ROLES[sg.role]||sg.role)}</b> — ${esc(sg.name||"")}<br><span style="color:var(--text-soft)">${esc(fmtDate(sg.date))}</span></span>
+      <button class="btn-sm danger" data-sgdel="${esc(sg.id)}">Remove</button></div>`).join("");
+    byId("sgList").querySelectorAll("[data-sgdel]").forEach(b=>b.onclick=()=>{
+      const i=sigList().findIndex(s=>s.id===b.dataset.sgdel); if(i>=0) sigList().splice(i,1);
+      saveLocal(); renderList();
+    });
+  };
+  const at=e=>{ const r=pad.getBoundingClientRect(); return {x:Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)), y:Math.min(1,Math.max(0,(e.clientY-r.top)/r.height))}; };
+  pad.onpointerdown=e=>{ e.preventDefault(); pad.setPointerCapture(e.pointerId); cur=[at(e)]; strokes.push(cur); redraw(); };
+  pad.onpointermove=e=>{ if(!cur) return; cur.push(at(e)); redraw(); };
+  pad.onpointerup=pad.onpointercancel=()=>{ cur=null; };
+  byId("sgRole").querySelectorAll("button").forEach(b=>b.onclick=()=>setRole(b.dataset.r));
+  byId("sgClear").onclick=()=>{ strokes=[]; redraw(); };
+  byId("sgPlace").onclick=()=>{
+    if(!strokes.length){ byId("sgMsg").textContent="Sign in the box first."; return; }
+    // round to keep the save small — 4 places is sub-pixel even at the pad's full width
+    const ink=strokes.map(st=>st.map(p=>({x:+p.x.toFixed(4), y:+p.y.toFixed(4)})));
+    const old=sigList().find(s=>s.role===role);
+    // new: under page 1's footer, customer left / rep right — the rep drags it elsewhere if wanted
+    const sg=old||{id:role, role, page:0, x:role==="rep"?612-36-SIG_W:36, y:SIG_FOOT_Y};
+    Object.assign(sg,{w:SIG_W, h:SIG_H, name:byId("sgName").value.trim(), date:localISODate(), strokes:ink});
+    if(!old) sigList().push(sg);
+    saveLocal();
+    closeModal();                   // rebuilds the PDF, which carries the signature to native
+  };
+  setRole(role); renderList();
+}
 byId("pdfPagesBtn").onclick=()=>{ setPage("diagram"); setTool("pages"); };
 byId("pdfShare").onclick=()=>pdfExport("share");
 byId("pdfPrint").onclick=()=>pdfExport("print");
@@ -5721,19 +7086,26 @@ byId("btnPrint").onclick=()=>setPage("pdf");
 /* KEYBOARD                                                    */
 /* ============================================================ */
 const TOOLKEYS={v:"select",h:"hand",p:"pages",g:"gutter",d:"ds",s:"valley",b:"splash",t:"text",a:"arrow",m:"stamp",y:"hl",x:"demo",n:"screen"};
+// Photos' own tool keys — bare letters, like the Diagram's, chosen from PDF Expert's
+// mnemonics where they don't collide with the letters above: p/e/r/o/l/a/t already match;
+// m(arker), g(shape), c(allout) are Gutters' own picks.
+const PHOTO_TOOLKEYS={v:"select",p:"pen",m:"highlight",l:"line",r:"rect",o:"ellipse",a:"arrow",g:"polygon",t:"text",c:"callout",e:"eraser"};
 window.addEventListener("keydown",e=>{
   const tag=(e.target.tagName||"").toLowerCase();
   const typing = tag==="input"||tag==="textarea"||tag==="select"||e.target.isContentEditable;
   if(e.code==="Space" && !typing){ spaceDown=true; if(!panning)canvas.style.cursor="grab"; e.preventDefault(); return; }
   if(typing) return;
   if(modalWrap.style.display==="flex" && e.key==="Escape"){ closeModal(); return; }
-  // photo page: undo/redo, delete selection, finish/cancel line; don't trigger diagram tools
+  // photo page: undo/redo, delete selection, finish/cancel line, tool keys; don't trigger diagram tools
   if(curPage==="photos"){
     if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="z"){ e.preventDefault(); if(e.shiftKey)redo(); else undo(); return; }
     if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="y"){ e.preventDefault(); redo(); return; }
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="d"){ e.preventDefault(); duplicatePhotoSelection(); return; }
     if(e.key==="Delete"||e.key==="Backspace"){ e.preventDefault(); deletePhotoSelection(); return; }
     if(e.key==="Enter"){ e.preventDefault(); finishPhotoLine(); return; }
     if(e.key==="Escape"){ e.preventDefault(); cancelPhotoLine(); clearPhotoSel(); return; }
+    const pk=PHOTO_TOOLKEYS[e.key.toLowerCase()];
+    if(pk){ setPhotoTool(pk); return; }
     return;
   }
   // PDF View is read-only: don't let tool hotkeys act on the hidden diagram

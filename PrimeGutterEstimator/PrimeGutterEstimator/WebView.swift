@@ -21,6 +21,9 @@ struct WebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
+        // The burst camera's viewfinder is a muted inline <video> fed by getUserMedia;
+        // without this WebKit waits for a user gesture and the preview stays black.
+        config.mediaTypesRequiringUserActionForPlayback = []
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.websiteDataStore = .default()        // persists the localStorage autosave
 
@@ -47,7 +50,7 @@ struct WebView: UIViewRepresentable {
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate,
-                             WKScriptMessageHandler {
+                             WKScriptMessageHandler, UIGestureRecognizerDelegate {
 
         weak var mainWebView: WKWebView?
 
@@ -59,6 +62,8 @@ struct WebView: UIViewRepresentable {
         private var pdfName = "Estimate.pdf"
         private var pdfView: PDFView?
         private var pdfHidden = true              // what the web side last asked for (tab left, modal open)
+        private var pdfBuildSigs: [[String: Any]] = []   // signatures sent with the pending build
+        private var sigDrag: (ann: SignatureAnnotation, grab: CGPoint)?   // grab = finger offset from the card's origin
 
         private func topVC() -> UIViewController? {
             let scene = UIApplication.shared.connectedScenes
@@ -118,6 +123,7 @@ struct WebView: UIViewRepresentable {
                 guard let html = d["html"] as? String else { return }
                 pdfBuildSeq = (d["seq"] as? NSNumber)?.intValue ?? (pdfBuildSeq + 1)
                 pdfBuildName = (d["name"] as? String) ?? "Estimate.pdf"
+                pdfBuildSigs = (d["sigs"] as? [[String: Any]]) ?? []
                 pdfHidden = (d["hidden"] as? Bool) ?? false
                 if pdfHidden { pdfView?.isHidden = true }
                 if let r = rect(d) { placePdfView(r) }
@@ -137,9 +143,9 @@ struct WebView: UIViewRepresentable {
                 pdfHidden = false
                 pdfView?.isHidden = (pdfView?.document == nil)
             case "share":
-                if let data = pdfData { share(name: pdfName, data: data) }
+                if let data = exportData() { share(name: pdfName, data: data) }
             case "print":
-                if let data = pdfData { printPDF(data) }
+                if let data = exportData() { printPDF(data) }
             default: break
             }
         }
@@ -167,6 +173,11 @@ struct WebView: UIViewRepresentable {
                 v.displayDirection = .vertical
                 v.backgroundColor = UIColor(red: 0.42, green: 0.47, blue: 0.52, alpha: 1)  // #6b7885, the web page's backdrop
                 v.isHidden = true
+                // press-and-hold a signature, then drag — a plain pan would fight the PDF's own scrolling
+                let hold = UILongPressGestureRecognizer(target: self, action: #selector(dragSignature(_:)))
+                hold.minimumPressDuration = 0.2
+                hold.delegate = self
+                v.addGestureRecognizer(hold)
                 host.addSubview(v)
                 pdfView = v
             }
@@ -175,7 +186,7 @@ struct WebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard webView === pdfBuildWeb else { return }   // ignore the main app's loads
-            let seq = pdfBuildSeq, name = pdfBuildName
+            let seq = pdfBuildSeq, name = pdfBuildName, sigs = pdfBuildSigs
             // small delay so images (photos, title image) finish laying out
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
                 guard let self, webView === self.pdfBuildWeb, seq == self.pdfBuildSeq else { return }
@@ -187,7 +198,13 @@ struct WebView: UIViewRepresentable {
                 }
                 self.pdfData = data
                 self.pdfName = name
+                // stay on the page being viewed: a rebuild (placing a signature, Refresh) used to jump to page 1
+                var viewing = 0
+                if let v = self.pdfView, let old = v.document, let pg = v.currentPage { viewing = old.index(for: pg) }
+                viewing = min(max(0, viewing), doc.pageCount - 1)
+                self.addSignatures(sigs, to: doc, viewing: viewing)
                 self.pdfView?.document = doc
+                if viewing > 0, let pg = doc.page(at: viewing) { self.pdfView?.go(to: pg) }
                 self.pdfView?.isHidden = self.pdfHidden
                 self.callJS("pdfNativeDone(\(seq), \(doc.pageCount))")
             }
@@ -220,6 +237,143 @@ struct WebView: UIViewRepresentable {
             }
         }
 
+        // MARK: Signatures
+
+        /// Stamps each signature card onto its page. The web side stores rects with a top-left origin
+        /// (so they read like the HTML); PDF page space is bottom-left, hence the flip. A page past the
+        /// end (the packet got shorter) clamps to the last page; page:null is a fresh signature, centred
+        /// on the page in view and reported back so the web side can persist where it landed.
+        private func addSignatures(_ sigs: [[String: Any]], to doc: PDFDocument, viewing: Int) {
+            for s in sigs {
+                guard let id = s["id"] as? String,
+                      let png = s["png"] as? String,
+                      let b64 = png.components(separatedBy: ",").last,
+                      let bytes = Data(base64Encoded: b64),
+                      let img = UIImage(data: bytes)?.cgImage else { continue }
+                let w = (s["w"] as? NSNumber)?.doubleValue ?? 170
+                let h = (s["h"] as? NSNumber)?.doubleValue ?? 44
+                let placed = (s["page"] as? NSNumber) != nil
+                let idx = min(max(0, (s["page"] as? NSNumber)?.intValue ?? viewing), doc.pageCount - 1)
+                guard let page = doc.page(at: idx) else { continue }
+                let box = page.bounds(for: .mediaBox)
+                var r: CGRect
+                if placed {
+                    let x = (s["x"] as? NSNumber)?.doubleValue ?? 0
+                    let y = (s["y"] as? NSNumber)?.doubleValue ?? 0
+                    r = CGRect(x: box.minX + x, y: box.maxY - y - h, width: w, height: h)
+                } else {
+                    r = CGRect(x: box.midX - w / 2, y: box.midY - h / 2, width: w, height: h)
+                }
+                r = clamp(r, to: box)
+                let ann = SignatureAnnotation(id: id, image: img, bounds: r)
+                page.addAnnotation(ann)
+                if !placed || idx != (s["page"] as? NSNumber)?.intValue { reportSignature(ann, on: page, in: doc) }
+            }
+        }
+
+        private func clamp(_ r: CGRect, to box: CGRect) -> CGRect {
+            var r = r
+            r.origin.x = min(max(box.minX, r.minX), box.maxX - r.width)
+            r.origin.y = min(max(box.minY, r.minY), box.maxY - r.height)
+            return r
+        }
+
+        private func reportSignature(_ ann: SignatureAnnotation, on page: PDFPage, in doc: PDFDocument) {
+            let box = page.bounds(for: .mediaBox)
+            let x = ann.bounds.minX - box.minX, y = box.maxY - ann.bounds.maxY
+            let id = ann.sigId.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+            callJS("pdfSigMoved('\(id)', \(doc.index(for: page)), \(x), \(y))")
+        }
+
+        private func signature(at viewPoint: CGPoint) -> (SignatureAnnotation, PDFPage)? {
+            guard let v = pdfView, let page = v.page(for: viewPoint, nearest: false) else { return nil }
+            let p = v.convert(viewPoint, to: page)
+            // topmost first, in case two cards overlap
+            for a in page.annotations.reversed() {
+                if let s = a as? SignatureAnnotation, s.bounds.contains(p) { return (s, page) }
+            }
+            return nil
+        }
+
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let v = pdfView, g.view === v else { return true }
+            return signature(at: g.location(in: v)) != nil
+        }
+
+        // PDFView's own long-press (text selection) waits for ours, or it wins on a signature
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard let v = pdfView, g.view === v, g.delegate === self else { return false }
+            return other is UILongPressGestureRecognizer
+        }
+
+        private func pdfScrollView(_ v: UIView) -> UIScrollView? {
+            for sub in v.subviews {
+                if let s = sub as? UIScrollView { return s }
+                if let s = pdfScrollView(sub) { return s }
+            }
+            return nil
+        }
+
+        @objc private func dragSignature(_ g: UILongPressGestureRecognizer) {
+            guard let v = pdfView, let doc = v.document else { return }
+            let pt = g.location(in: v)
+            switch g.state {
+            case .began:
+                guard let hit = signature(at: pt) else { return }
+                let ann = hit.0, p = v.convert(pt, to: hit.1)
+                sigDrag = (ann, CGPoint(x: p.x - ann.bounds.minX, y: p.y - ann.bounds.minY))
+                pdfScrollView(v)?.isScrollEnabled = false
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            case .changed:
+                guard let drag = sigDrag, let page = drag.ann.page else { return }
+                let ann = drag.ann, grab = drag.grab
+                // the finger may be over another page by now; the card moves there on release
+                let target = v.page(for: pt, nearest: true) ?? page
+                let p = v.convert(pt, to: target)
+                var r = ann.bounds
+                r.origin = CGPoint(x: p.x - grab.x, y: p.y - grab.y)
+                r = clamp(r, to: target.bounds(for: .mediaBox))
+                if target !== page {
+                    page.removeAnnotation(ann)
+                    ann.bounds = r
+                    target.addAnnotation(ann)
+                } else {
+                    ann.bounds = r
+                }
+            case .ended, .cancelled, .failed:
+                pdfScrollView(v)?.isScrollEnabled = true
+                if let ann = sigDrag?.ann, let page = ann.page { reportSignature(ann, on: page, in: doc) }
+                sigDrag = nil
+            default: break
+            }
+        }
+
+        /// A custom-drawn annotation isn't written out by dataRepresentation(), so when the document
+        /// carries signatures, redraw every page into a fresh PDF — PDFPage.draw includes its
+        /// annotations — and the text and diagram stay vector.
+        private func exportData() -> Data? {
+            guard let doc = pdfView?.document, doc.pageCount > 0 else { return pdfData }
+            let signed = (0..<doc.pageCount).contains { i in
+                doc.page(at: i)?.annotations.contains { $0 is SignatureAnnotation } ?? false
+            }
+            guard signed, let first = doc.page(at: 0) else { return pdfData }
+            let renderer = UIGraphicsPDFRenderer(bounds: first.bounds(for: .mediaBox))
+            return renderer.pdfData { ctx in
+                for i in 0..<doc.pageCount {
+                    guard let page = doc.page(at: i) else { continue }
+                    let box = page.bounds(for: .mediaBox)
+                    ctx.beginPage(withBounds: box, pageInfo: [:])
+                    let cg = ctx.cgContext
+                    cg.saveGState()
+                    cg.translateBy(x: 0, y: box.height)     // UIKit's context is top-left; PDF pages are bottom-left
+                    cg.scaleBy(x: 1, y: -1)
+                    page.draw(with: .mediaBox, to: cg)
+                    cg.restoreGState()
+                }
+            }
+        }
+
         private func printPDF(_ data: Data) {
             guard let vc = topVC() else { return }
             let info = UIPrintInfo(dictionary: nil)
@@ -247,6 +401,18 @@ struct WebView: UIViewRepresentable {
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
             if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
             return nil
+        }
+
+        // Camera permission — REQUIRED, or getUserMedia is auto-denied and the burst
+        // camera falls back to the one-shot iOS capture sheet. The only page loaded here
+        // is the bundled file:// app and the camera is only reachable from "Take photo",
+        // so grant it and let iOS's own NSCameraUsageDescription prompt be the real gate.
+        func webView(_ webView: WKWebView,
+                     requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                     initiatedByFrame frame: WKFrameInfo,
+                     type: WKMediaCaptureType,
+                     decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+            decisionHandler(type == .camera ? .grant : .deny)   // never the microphone
         }
 
         // JavaScript dialogs — REQUIRED, or alert()/confirm()/prompt() silently no-op in
@@ -282,5 +448,27 @@ struct WebView: UIViewRepresentable {
             })
             vc.present(a, animated: true)
         }
+    }
+}
+
+/// A signature card stamped on a PDF page: the web side renders the card (white box, ink, name,
+/// date) to a PNG and this just draws it into its bounds, so screen, Share and Print all match.
+final class SignatureAnnotation: PDFAnnotation {
+    let sigId: String
+    private let image: CGImage
+
+    init(id: String, image: CGImage, bounds: CGRect) {
+        self.sigId = id
+        self.image = image
+        super.init(bounds: bounds, forType: .stamp, withProperties: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        context.saveGState()
+        context.interpolationQuality = .high
+        context.draw(image, in: bounds)     // page space is y-up, which is what CGContext.draw expects
+        context.restoreGState()
     }
 }
