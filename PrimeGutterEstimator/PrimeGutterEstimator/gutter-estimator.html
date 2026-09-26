@@ -197,11 +197,18 @@ input,select,textarea{font-family:inherit;font-size:13px}
 #photoStage{position:absolute;inset:0;display:none;flex-direction:column}
 
 /* tool dock */
+/* Scrolls once custom product tools push it past the stage — the tools below the fold were
+   unreachable. max-height stops 56px short of the bottom to clear #railToggle/#diagUndoBar.
+   The scroller clips the .tip flyouts, so buildDock() also sets a plain title for mouse users. */
 #dock{
   position:absolute;left:12px;top:12px;z-index:6;
   background:var(--ink);border:1px solid #0c131b;border-radius:12px;padding:6px;
   display:flex;flex-direction:column;gap:4px;box-shadow:0 8px 26px rgba(0,0,0,.35);
+  max-height:calc(100% - 68px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;
 }
+#dock::-webkit-scrollbar{display:none}
+#dock > *{flex:0 0 auto}
 .tool{
   width:40px;height:40px;border-radius:9px;border:0;background:transparent;color:#aebccb;cursor:pointer;
   display:grid;place-items:center;position:relative;
@@ -1356,6 +1363,7 @@ function junctionCorners(){
     }
     if(cl.length<2) continue;
     if(!cl.some(e=>e.o!==cl[0].o)) continue;   // one run doubling back on itself, not a junction
+    if(cl.every(e=>e.o.existing)) continue;     // old gutter meeting old gutter — nothing to buy (new↔existing still bills)
     // n arms meeting form n-1 miters, less the one runCorners already counts per closed loop
     const loops=new Set(cl.filter(e=>e.loop).map(e=>e.o)).size;
     const budget=cl.length-1-loops;
@@ -1422,6 +1430,13 @@ function customTagOwners(){
 /* ============================================================ */
 /* TAKEOFF / COMPUTE                                            */
 /* ============================================================ */
+/* "Existing system": gutter runs and downspouts the homeowner already has, flagged o.existing.
+   A screen-only option is the replacement option duplicated with its runs converted, so the rep
+   never redraws the house. They draw grey/dashed and are skipped by compute(), materialList() and
+   junctionCorners(); geometry (joins, free ends) still treats them as ordinary runs. */
+const EXISTING_TYPES=["gutter","ds"];
+function isExisting(o){ return !!(o && o.existing && EXISTING_TYPES.includes(o.t)); }
+
 function compute(){
   ensurePrices();
   const s=P.settings;
@@ -1441,6 +1456,7 @@ function compute(){
   const screenRaw={};                  // raw gutter-screen footage by type (rounded up to mult of 4)
 
   for(const o of P.objects){
+    if(isExisting(o)) continue;   // the homeowner's existing system: drawn for context, never billed
     if(o.t==="gutter"){
       const ft=(o.lengths||[]).reduce((a,b)=>a+(+b||0),0);
       const gs=gutterStyle(gutterSizeFor(o));
@@ -1614,6 +1630,7 @@ function materialList(){
   let valley=0, splashP=0, splashC=0;
   const add=(map,key,base)=>{ if(!map[key]) map[key]=Object.assign({qty:0},base); return map[key]; };
   for(const o of P.objects){
+    if(isExisting(o)) continue;   // must match compute() — existing gutter/ds are never billed
     if(o.t==="gutter"){
       const size=gutterStyle(gutterSizeFor(o)).label;
       const colorName=o.color||s.gutterColor;
@@ -1898,6 +1915,7 @@ function drawGutter(o){
   const isSel=sel.has(o.id);
   const col=colorHex(o.color||P.settings.gutterColor,effBrand(o));
   const w6 = gutterStyle(gutterSizeFor(o)).wide;
+  if(o.existing) return drawExistingGutter(o,pts,isSel);
   // casing
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="round";
@@ -1928,6 +1946,35 @@ function drawGutter(o){
     const box=segChip(o,i,mx,my,txt,{size:_sz,pad:Math.max(2,_sz*0.42),bold:true,bg:empty?"#fff":"#1b2530",fg:empty?"#c8202a":"#fff",
       bc:empty?"#c8202a":"#1b2530",bw:empty?1.5:1});
     addLabelBox("seglen",o.id,box.x,box.y,box.w,box.h,{seg:i});
+  }
+  drawVertexHandles(o,pts);
+}
+// The homeowner's existing run (see isExisting): grey dashed, no cap/miter marks since nothing is
+// bought, footage chips kept (greyed) so screen footage still reads against the run.
+const EXISTING_COL="#8a96a3";
+function drawExistingGutter(o,pts,isSel){
+  ctx.save();
+  ctx.lineJoin="round";ctx.lineCap="butt";
+  ctx.strokeStyle=EXISTING_COL;ctx.lineWidth=4;ctx.setLineDash([10,6]);
+  line(pts);ctx.setLineDash([]);
+  if(isSel){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=1.5;ctx.setLineDash([5,4]);line(pts);ctx.setLineDash([]); }
+  ctx.restore();
+  let longest=-1, best=0;
+  for(let i=0;i<o.pts.length-1;i++){
+    const a=pts[i], b=pts[i+1];
+    const d=Math.hypot(b.x-a.x,b.y-a.y); if(d>best){ best=d; longest=i; }
+    const ft=o.lengths[i], empty=(ft==null||ft==="");
+    const _sz=chipPx(12);
+    const box=segChip(o,i,(a.x+b.x)/2,(a.y+b.y)/2,empty?"+":ftStr(ft),{size:_sz,pad:Math.max(2,_sz*0.42),bold:true,
+      bg:"#fff",fg:"#5d6a78",bc:EXISTING_COL,bw:1});
+    addLabelBox("seglen",o.id,box.x,box.y,box.w,box.h,{seg:i});
+  }
+  // one EXISTING tag per run, on its longest segment a quarter of the way along — the midpoint
+  // belongs to the footage chip, and a sideways offset still collided with it on vertical runs
+  if(longest>=0){
+    const a=pts[longest], b=pts[longest+1];
+    const _tz=chipPx(9);
+    chip("EXISTING",a.x+(b.x-a.x)*0.25,a.y+(b.y-a.y)*0.25,{size:_tz,pad:Math.max(2,_tz*0.4),bold:true,bg:EXISTING_COL,fg:"#fff",bc:EXISTING_COL,r:4});
   }
   drawVertexHandles(o,pts);
 }
@@ -2005,7 +2052,7 @@ function drawCustom(o){
 
 function drawDS(o){
   const s=worldToScreen(o);
-  const col=colorHex(o.color||P.settings.downspoutColor,effBrand(o));
+  const col=o.existing ? EXISTING_COL : colorHex(o.color||P.settings.downspoutColor,effBrand(o));
   const sz=dsSizeFor(o);
   const k=markerK();                 // marker scales with zoom, same as the labels
   ctx.save();
@@ -2018,7 +2065,7 @@ function drawDS(o){
   ctx.restore();
   // notation chip below
   const d=parseDS(o.notation);
-  const label=(o.notation&&o.notation.trim())?o.notation.trim().toUpperCase():"(1 outlet)";
+  const label=(o.notation&&o.notation.trim())?o.notation.trim().toUpperCase():(o.existing?"EXISTING":"(1 outlet)");
   const _dsz=chipPx(11);
   const box=segChip(o,"note",s.x,s.y+20*k,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
   addLabelBox("dsnote",o.id,box.x,box.y,box.w,box.h);
@@ -2589,7 +2636,7 @@ let activeToolId="gutter";   // which dock button is highlighted
 let activeCustom=null;        // active custom product id (when behavior==="custom")
 
 function buildDock(){
-  const d=document.getElementById("dock");d.innerHTML="";
+  const d=document.getElementById("dock"); const keepScroll=d.scrollTop; d.innerHTML="";
   for(const t of allTools()){
     if(t.id==="_div"){ const dv=document.createElement("div");dv.className="dock-div";d.appendChild(dv);continue; }
     const b=document.createElement("button");
@@ -2597,15 +2644,20 @@ function buildDock(){
     const lbl = t.lbl? '<span class="tlbl">'+t.lbl+'</span>' : '';
     const key = t.key? '<span class="kbd">'+t.key+'</span>' : '';
     b.innerHTML=(ICON[t.icon]||ICON.custom)+lbl+key+'<span class="tip">'+t.name+(t.key?' ('+t.key+')':'')+'</span>';
+    b.title=t.name+(t.key?' ('+t.key+')':'');
     b.onclick=()=>{ if(t.behavior==="_action"){ if(t.id==="addCustom") openCustomProduct(); } else setTool(t.id); };
     d.appendChild(b);
   }
+  d.scrollTop=keepScroll;   // rebuilt on every setTool — don't jump back to the top after picking a low tool
 }
 function setTool(id){
   commitEditor();
   cancelDrawing();
   calib=null;
   const def=toolDefById(id)||{id,behavior:id};
+  // Placing a ds/valley/splash selects it (so its options show); switching tools must drop that,
+  // or the Select tool's next drag carried the last-placed object along with the one grabbed.
+  if(id!==activeToolId){ sel.clear(); segSel.clear(); }   // buildOptbar() below reflects it
   activeToolId=id;
   tool=def.behavior||id;
   if(def.behavior==="gutter" && def.size) gutterDrawSize=def.size;
@@ -3014,7 +3066,9 @@ function buildOptbar(){
       + dv + g('<label><input type="checkbox" id="opScreenErase" '+(screenErase?"checked":"")+'> Eraser</label>')
       + '<span class="mini" style="color:var(--text-soft)">'+(screenErase?'Drag over screen highlight to erase it (subtracts footage)':'Drag over runs · rounds up to next 4 ft')+'</span>';
   } else if(tool==="select"){
-    h+='<span class="ob-title">SELECT</span>'+dv;
+    // Snap lives here too, so a rep tidying the layout needn't hop to the Gutter tool to flip it
+    h+='<span class="ob-title">SELECT</span>'+dv
+      + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap to grid</label>')+dv;
     const one = sel.size===1 ? objById([...sel][0]) : null;
     if(one && one.t==="ds"){
       const oBrand=effBrand(one);                       // this spout's effective brand
@@ -3026,7 +3080,8 @@ function buildOptbar(){
         + g('<label>Spout color</label><span class="swatch" id="opSelSw" style="background:'+colorHex(cur,oBrand)+'"></span><select id="opSelDsColor">'+dsColorOpts+'</select>')
         + g('<label>Size</label><select id="opSelDsSize"'+(szs.length<2?' disabled':'')+'>'+szs.map(s=>'<option value="'+s+'"'+(curSz===s?' selected':'')+'>'+dsStyle(s).short+'</option>').join("")+'</select>')
         + '<span class="mini" style="color:var(--text-soft)">Override for brick vs. stucco, etc.</span>'
-        + g('<label><input type="checkbox" id="opDsShowSize" '+(P.settings.showDsSize?"checked":"")+'> Show size tags</label>');
+        + g('<label><input type="checkbox" id="opDsShowSize" '+(P.settings.showDsSize?"checked":"")+'> Show size tags</label>')
+        + g('<label title="Homeowner\'s existing downspout — drawn grey, not priced"><input type="checkbox" id="opSelExisting" '+(one.existing?"checked":"")+'> Existing</label>');
       // an explicit button beats relying on a double-tap landing on a small chip
       if(P.settings.showDsSize && (one.sizeOff||one.noteOff)) h+= g('<button class="chip" id="opSelDsResetLbl">↺ Reset label positions</button>');
       h+= dv;
@@ -3041,7 +3096,8 @@ function buildOptbar(){
         + g('<label>Gutter color</label><span class="swatch" id="opSelSw" style="background:'+colorHex(one.color||P.settings.gutterColor,oBrand)+'"></span><select id="opSelGutColor">'+gutColorOpts+'</select>')
         + g('<label>Style</label><select id="opSelGutSize"><option value="">Job default</option>'+GUTTER_STYLES.map(st=>'<option value="'+st.id+'"'+(one.size===st.id?' selected':'')+'>'+st.short+'</option>').join("")+'</select>')
         + g('<label>'+capChk(0)+' '+capLbl(0,'Start cap')+'</label>')
-        + g('<label>'+capChk(1)+' '+capLbl(1,'End cap')+'</label>') + dv;
+        + g('<label>'+capChk(1)+' '+capLbl(1,'End cap')+'</label>')
+        + g('<label title="Homeowner\'s existing gutter — drawn grey dashed, not priced"><input type="checkbox" id="opSelExisting" '+(one.existing?"checked":"")+'> Existing</label>') + dv;
     } else if(one && one.t==="stamp"){
       h+= g('<label>Stamp color</label><span class="swatch" id="opSelSw" style="background:'+(one.color||'#c8202a')+'"></span><button class="chip" id="opSelStampCol">Color…</button>') + dv;
     } else if(one && one.t==="screen"){
@@ -3060,7 +3116,8 @@ function buildOptbar(){
       h+='<span class="mini" style="color:var(--text-soft)">'+(sel.size>1?sel.size+' selected':'Click to edit a measurement or note • drag to move')+'</span>' + dv;
     }
     h+= g('<button class="chip" id="opDelete">Delete</button>')
-      + g('<button class="chip" id="opDupe">Duplicate</button>');
+      + g('<button class="chip" id="opDupe">Duplicate</button>')
+      + dv + g('<button class="chip" id="opExisting" title="Mark gutters/downspouts as the homeowner\'s existing system (not priced)">Existing system…</button>');
   } else {
     h+='<span class="ob-title">PAN</span>'+dv+'<span class="mini" style="color:var(--text-soft)">Drag to move around the diagram</span>';
   }
@@ -3130,6 +3187,8 @@ function wireOptbar(){
   if(byId("opScreenErase")) byId("opScreenErase").onchange=e=>{ screenErase=e.target.checked; buildOptbar(); setHint(toolHint("screen")); draw(); };
   if(byId("opDelete")) byId("opDelete").onclick=deleteSelected;
   if(byId("opDupe")) byId("opDupe").onclick=duplicateSelected;
+  if(byId("opExisting")) byId("opExisting").onclick=openExistingSystem;
+  if(byId("opSelExisting")) byId("opSelExisting").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); if(e.target.checked) o.existing=true; else delete o.existing; refreshAll(); } };
   const selOne=()=> sel.size===1?objById([...sel][0]):null;
   if(byId("opSelDsBrand")) byId("opSelDsBrand").onchange=e=>{
     const o=selOne(); if(!o) return; recordHistory();
@@ -3559,8 +3618,12 @@ function onDown(e){
         // Capture clones so a drag moves the hit object and everything else selected. Runs the
         // marquee picked up live in segSel, not sel — leaving them out of this set is what used
         // to strand box-selected runs (they drew as selected, then stayed put on the drag).
-        const moveIds=new Set(sel);
-        segSel.forEach(k=>moveIds.add(parseSegKey(k).objId));
+        // Grabbing something outside the selection drags just it (shift adds to the group) — a
+        // leftover selection used to ride along with whatever was grabbed next.
+        const inSel = sel.has(hit.objId) || [...segSel].some(k=>parseSegKey(k).objId===hit.objId);
+        const moveIds=new Set();
+        if(inSel || e.shiftKey){ sel.forEach(id=>moveIds.add(id)); segSel.forEach(k=>moveIds.add(parseSegKey(k).objId)); }
+        else if(hit.kind!=="text"){ sel.clear(); segSel.clear(); sel.add(hit.objId); }   // text keeps its two-tap select/edit in onUp
         moveIds.add(hit.objId);
         const ids=[...moveIds];                       // keep real id values (numbers)
         const clones={}; ids.forEach(id=>{ const ob=objById(id); if(ob) clones[id]=JSON.parse(JSON.stringify(ob)); });
@@ -3724,7 +3787,10 @@ function onMove(e){
     const dx=pt.x-press.pt.x, dy=pt.y-press.pt.y;
     if(!press.moved && Math.hypot(dx,dy)>4) press.moved=true;
     if(press.mode==="maybeMove" && press.moved){
-      const wdx=dx/cam.scale, wdy=dy/cam.scale;
+      // with Snap on, a move steps in whole grid squares so grid-aligned work stays aligned
+      // (snapping the delta, not the grab point, so nothing jumps on pickup)
+      const q=v=>snap?Math.round(v/GRID)*GRID:v;
+      const wdx=q(dx/cam.scale), wdy=q(dy/cam.scale);
       (press.ids||[]).forEach(id=>{ const o=objById(id); if(o&&press.clones[id]) translateInto(o,press.clones[id],wdx,wdy); });
       draw();
     } else if(press.mode==="moveLabel" && press.moved){
@@ -4195,6 +4261,19 @@ function commitEditor(){
   return was;
 }
 
+/* ✓ used to commit on pointerdown, which hid #floatEdit mid-tap — the same tap's pointerup and
+   click then landed on whatever was underneath (a dock tool, the Delete bar, undo), so pressing
+   Done on the downspout keypad could switch tools or delete the selection. Commit on the button's
+   own click instead (the keypad is still there to receive it), and swallow any stray click that
+   still arrives in the next moment. */
+let swallowClickUntil=0;
+window.addEventListener("click",ev=>{
+  if(Date.now()<swallowClickUntil && !FE.contains(ev.target)){ ev.preventDefault(); ev.stopPropagation(); }
+},true);
+function commitFromButton(){ swallowClickUntil=Date.now()+350; commitEditor(); }
+// taps on the editor/keypad are the editor's own — never let them reach stage-level handlers
+FE.addEventListener("pointerdown",ev=>ev.stopPropagation());
+
 function openEditorFor(hit){
   if(editing) commitEditor();
   const o = objById(hit.objId); if(!o) return;
@@ -4244,7 +4323,9 @@ function openEditorFor(hit){
     const doneBtn=document.createElement("button");
     doneBtn.textContent="✓ Done";
     doneBtn.style.cssText="display:block;margin-top:5px;width:100%;padding:7px 0;border-radius:6px;border:0;background:#1f9d55;color:#fff;font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation";
-    doneBtn.onpointerdown=(ev)=>{ ev.preventDefault(); commitEditor(); };
+    // pointerdown only keeps focus; the commit waits for click — see commitFromButton()
+    doneBtn.onpointerdown=(ev)=>{ ev.preventDefault(); };
+    doneBtn.onclick=(ev)=>{ ev.preventDefault(); commitFromButton(); };
     FE.appendChild(doneBtn);
   }
   if(hit.kind==="dsnote"){
@@ -4287,9 +4368,10 @@ function openEditorFor(hit){
       btn.textContent=k;
       btn.style.cssText="padding:12px 14px;border-radius:7px;border:1px solid #3a4d61;"
         +"background:"+bg+";color:#dce6ef;font-size:16px;font-weight:700;cursor:pointer;touch-action:manipulation;flex:1";
+      if(k==="✓") btn.onclick=(ev)=>{ ev.preventDefault(); commitFromButton(); };
       btn.onpointerdown=(ev)=>{
         ev.preventDefault();
-        if(k==="✓"){ commitEditor(); }
+        if(k==="✓"){ /* commits on click — see commitFromButton() */ }
         else if(k==="TL"){ field.value=(field.value.replace(/\s*TL\s*$/i,"").trim()+" TL").trim().toUpperCase(); } // "to lower" — goes last, e.g. AAA 10 TL
         else { field.value=(field.value+k).toUpperCase(); }
       };
@@ -4778,6 +4860,37 @@ function openCustomProduct(editId){
     }
   });
 }
+/* Bulk convert to/from the existing system — the screen-only option is the replacement option
+   duplicated (⧉) and converted here, instead of every run redrawn by hand. Applies to the
+   selection when there is one, else to the whole option. Gutters + downspouts by default. */
+function openExistingSystem(){
+  const scope = (sel.size||segSel.size) ? "selection" : "all";
+  const pool=()=>{
+    if(scope==="all") return P.objects;
+    const ids=new Set(sel); segSel.forEach(k=>ids.add(parseSegKey(k).objId));
+    return P.objects.filter(o=>ids.has(o.id));
+  };
+  const count=t=>pool().filter(o=>o.t===t).length;
+  let h=`<p class="mini" style="margin:0 0 10px;color:var(--text-soft)">Existing gutter and downspouts are drawn grey and dashed and left off the price, so gutter screen can be quoted on the homeowner's current system. Tip: duplicate the replacement option (⧉) first, then convert the copy.</p>`;
+  h+=`<div class="fld"><b>Applies to:</b> ${scope==="selection"?"the current selection":"everything in this option"}</div>`;
+  h+=`<label style="display:flex;align-items:center;gap:8px;margin:0 0 8px;font-weight:700"><input type="checkbox" id="exGut" checked style="width:18px;height:18px"> Gutters (${count("gutter")})</label>`;
+  h+=`<label style="display:flex;align-items:center;gap:8px;margin:0 0 8px;font-weight:700"><input type="checkbox" id="exDs" checked style="width:18px;height:18px"> Downspouts (${count("ds")})</label>`;
+  h+=`<div style="margin-top:6px;display:flex;gap:8px"><button class="btn-sm" id="exMark" style="background:var(--prime);color:#fff;border-color:var(--prime)">Mark existing</button><button class="btn-sm" id="exNew">Mark new</button></div>`;
+  openModal("Existing system",h);
+  const apply=on=>{
+    const types=[]; if(byId("exGut").checked) types.push("gutter"); if(byId("exDs").checked) types.push("ds");
+    const hits=pool().filter(o=>types.includes(o.t) && !!o.existing!==on);
+    closeModal();
+    if(!hits.length) return;
+    recordHistory();
+    hits.forEach(o=>{ if(on) o.existing=true; else delete o.existing; });
+    setHint(hits.length+" item"+(hits.length>1?"s":"")+" marked "+(on?"existing — not priced":"new — priced again")+".");
+    buildOptbar(); refreshAll();
+  };
+  byId("exMark").onclick=()=>apply(true);
+  byId("exNew").onclick=()=>apply(false);
+}
+
 function openModal(title,bodyHTML){
   byId("modalTitle").textContent=title;
   byId("modalBody").innerHTML=bodyHTML;
@@ -6732,7 +6845,7 @@ async function buildEstimateHTML(chosen){
     const laterDiagrams = frames.slice(1).map(f=>diagramSVG(f));
     const s=P.settings; const r=compute();
     const gBrand=s.gutterBrand||"Spectra", dBrand=s.downspoutBrand||"Spectra"; brandSet.add(gBrand); brandSet.add(dBrand);
-    for(const o of P.objects){ if(o.t==="gutter") addRole(effBrand(o),o.color||s.gutterColor,"Gutter"); else if(o.t==="ds") addRole(effBrand(o),o.color||s.downspoutColor,"Downspout"); }
+    for(const o of P.objects){ if(isExisting(o)) continue; if(o.t==="gutter") addRole(effBrand(o),o.color||s.gutterColor,"Gutter"); else if(o.t==="ds") addRole(effBrand(o),o.color||s.downspoutColor,"Downspout"); }
     const colorBlock=`<div class="colorline"><b>Gutter color:</b> ${esc(gBrand)} ${esc(s.gutterColor)} &nbsp;&nbsp; <b>Downspout color:</b> ${esc(dBrand)} ${esc(s.downspoutColor)}</div>`;
     const mats=materialList();
     const matRows=mats.map(x=>{ const sw=`<span class="msw" style="background:${swatchHex(x.color,x.brand)}"></span>`; const name=x.color?(/^#/.test(x.color)?"":esc(x.color)):""; const colTxt=x.color?((x.brand?esc(x.brand)+" ":"")+name):"—"; return `<tr><td>${esc(x.item)}</td><td class="n">${x.qty} ${x.unit}</td><td>${x.color?sw:""}${colTxt}</td></tr>`; }).join("");
