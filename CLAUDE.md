@@ -93,7 +93,10 @@ quantities as human-readable BOM rows. **Any pricing rule change must be made in
 worksheet and the printed estimate disagree. Two deliberate pricing-only exceptions:
 `settings.newConstruction` zeroes end caps/outlets (and their flat-mode LF allowances) in `compute()`
 but `materialList()` still lists them; `settings.priceOverride` (>0) replaces the turnkey (`r.overridden`,
-`r.calcTurnkey`), deposit/card fee follow it, and `pdfPriceRows()` then prints only deposit + card fee.
+`r.calcTurnkey`), deposit/card fee follow it, and `pdfPriceRows()` then prints only deposit + card fee. Acute corners
+(≤ 90−`bayDeviation`, inside or outside) bill the regular miter (never bay) **plus** `prices.acute`
+(hand-edited add-on, $60 default, charged in flat mode too); `materialList()` splits miter rows
+"— inside"/"— outside" and adds one style-less "Acute miter" row.
 
 **Options are estimate variants.** `OPTIONS[]` each own their own `settings`, `objects` and
 undo `history`; `meta` (customer), `photos` and stamp presets are *shared*. `captureActive()` /
@@ -111,6 +114,15 @@ this from the points every time. Don't cache a "closed"/"joined" flag on an obje
 splitting and dragging all invalidate it, and a stale flag silently drops end caps or invents
 miters. Known limitation: only *endpoint-to-endpoint* joins are recognized; a run ending on
 another run's interior vertex counts as neither a miter nor a junction.
+
+**Front side → inside/outside miters.** `gutter.front` (+1 = left of the run's point order, −1 =
+right, world y-down; unset = auto) is the only stored piece; `runGroups()` re-derives which runs
+share it from the joins, and `runFronts()` resolves every run (a rep flip wins, else `autoFront()`:
+outside of the group's shoelace area, else away from the drawing's centroid, else page-bottom).
+Every corner from `runCorners()`/`junctionCorners()` carries `inside` (turn toward the front) and
+`acute`. `flipFront(run)` rewrites the whole group so explicit values never disagree. Each
+downspout's front arrow (`dsFrontOf()`, nearest segment within 2 GRID) prints; the I/O letters
+on miter marks (`drawCornerSides()`) are screen-only.
 
 **Photo blobs never live in `P`.** `P.photos` and `P.meta.titleImage` hold only ids; base64 sits
 in the `photoBlobs` Map, mirrored to IndexedDB. This is deliberate — blobs in `P` made undo

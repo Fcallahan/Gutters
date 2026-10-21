@@ -875,7 +875,7 @@ const PRICE_KEYS = [
   ...DS_STYLES.map(d=>d.priceKey),
   "diverters",
   ...DS_STYLES.map(d=>d.outletKey),
-  "valley","splashPlastic","splashConcrete","leaf6","leaf5","strip","box","bay",
+  "valley","splashPlastic","splashConcrete","leaf6","leaf5","strip","box","bay","acute",
   ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>g.miterKey),
   ...DS_STYLES.map(d=>d.elbowKey),
   ...DS_STYLES.map(d=>d.offsetKey),
@@ -924,6 +924,9 @@ function ensurePrices(){
   // splash blocks: plastic $10, concrete $30 (hand-editable)
   if(p.splashPlastic==null) p.splashPlastic=10;
   if(p.splashConcrete==null) p.splashConcrete=30;
+  // acute miter: a flat add-on per corner sharper than 90−bayDeviation, on top of that corner's
+  // regular miter. Hand-editable, not derived from any style rate, so a discount never touches it.
+  if(p.acute==null) p.acute=60;
   // anything not seeded yet defaults to 0
   PRICE_KEYS.forEach(k=>{ if(p[k]==null) p[k]=0; });
 
@@ -1354,24 +1357,113 @@ function snapEndNear(w){
   return null;
 }
 
-/* corners of a gutter run -> classification */
-function runCorners(run){
+/* ---- front side: which edge of a run faces away from the house ----
+   Inside vs outside miters hang on it. `o.front` (+1 = left of the run's point order, -1 = right,
+   world y-down; unset = auto) is the rep's call, but which runs share it is re-derived from the
+   joins every time, never stored — same reason isClosedRun() isn't a flag: extending, splitting
+   and dragging all change who is joined to whom. */
+// Runs joined end-to-end (within CAP_EPS), each with its point order relative to the group's
+// first run: end→start keeps the direction, start↔start / end↔end reverses it.
+function runGroups(){
+  const runs=P.objects.filter(o=>o.t==="gutter"&&o.pts&&o.pts.length>=2);
+  const orient=new Map(), groups=[];
+  const endsOf=o=>[[0,o.pts[0]],[1,o.pts[o.pts.length-1]]];
+  for(const r0 of runs){
+    if(orient.has(r0.id)) continue;
+    const g=[r0]; orient.set(r0.id,1);
+    for(let k=0;k<g.length;k++){
+      const a=g[k], sa=orient.get(a.id);
+      for(const b of runs){
+        if(b===a||orient.has(b.id)) continue;
+        for(const [ea,pa] of endsOf(a)) for(const [eb,pb] of endsOf(b)){
+          if(!orient.has(b.id) && dist(pa,pb)<CAP_EPS){ orient.set(b.id, ea!==eb ? sa : -sa); g.push(b); }
+        }
+      }
+    }
+    groups.push(g);
+  }
+  return {groups,orient};
+}
+// unit normal of segment a→b on the given front side (+1 = left of travel, which is up when
+// travelling right — world y points down)
+function frontNormal(a,b,f){ const dx=b.x-a.x, dy=b.y-a.y, m=Math.hypot(dx,dy)||1; return {x:f*dy/m, y:-f*dx/m}; }
+// No rep flip yet: the house is whatever the group wraps, so the front is the outside of it —
+// the group's shoelace area taken about its own centroid (exact for a closed wrap; for an open
+// L/U it closes the shape through the middle). A straight run wraps nothing: face away from the
+// rest of the drawing, or toward the bottom of the page — the front of the house as usually drawn.
+function autoFront(g,orient,cen){
+  const segs=[];
+  for(const r of g){
+    const q=orient.get(r.id)>0 ? r.pts : r.pts.slice().reverse();
+    for(let i=0;i<q.length-1;i++) segs.push([q[i],q[i+1]]);
+  }
+  let mx=0,my=0; for(const [a] of segs){ mx+=a.x; my+=a.y; } mx/=segs.length; my/=segs.length;
+  let A=0, len=0, best=segs[0];
+  for(const [a,b] of segs){
+    A+=((a.x-mx)*(b.y-my)-(b.x-mx)*(a.y-my))/2;
+    const d=dist(a,b); len+=d; if(d>dist(best[0],best[1])) best=[a,b];
+  }
+  if(Math.abs(A)>0.01*len*len) return A>0 ? 1 : -1;   // y-down: positive = clockwise on the page, outside = left
+  const n=frontNormal(best[0],best[1],1), m={x:(best[0].x+best[1].x)/2, y:(best[0].y+best[1].y)/2};
+  const toC=(cen.x-m.x)*n.x+(cen.y-m.y)*n.y;
+  if(Math.abs(toC)>GRID) return toC>0 ? -1 : 1;
+  return (n.y>0.01 || (Math.abs(n.y)<=0.01 && n.x<0)) ? 1 : -1;
+}
+// id -> front sign (in that run's own point order) for every gutter run
+function runFronts(){
+  const {groups,orient}=runGroups(), out=new Map();
+  let cx=0,cy=0,n=0;
+  for(const g of groups) for(const r of g) for(const p of r.pts){ cx+=p.x; cy+=p.y; n++; }
+  const cen=n?{x:cx/n,y:cy/n}:{x:0,y:0};
+  for(const g of groups){
+    // flipFront() writes every run of the group, so they agree; if two flipped groups are later
+    // joined, the first one in the group wins and the rep sees the result on the corners
+    const pin=g.find(r=>r.front===1||r.front===-1);
+    const f=pin ? pin.front*orient.get(pin.id) : autoFront(g,orient,cen);
+    for(const r of g) out.set(r.id, f*orient.get(r.id));
+  }
+  return out;
+}
+// the rep's correction: turn a run's whole connected group around
+function flipFront(run){
+  if(!run||run.t!=="gutter") return;
+  const {groups,orient}=runGroups();
+  const g=groups.find(x=>x.includes(run)); if(!g) return;
+  const f=runFronts().get(run.id)*orient.get(run.id);   // current front in the group's frame
+  recordHistory();
+  for(const r of g) r.front=-f*orient.get(r.id);
+  refreshAll();
+}
+const cross2=(a,b)=>a.x*b.y-a.y*b.x;
+// Box/strip/bay by angle; ACUTE (≤ 90−bayDeviation) bills as a regular miter plus the acute add-on,
+// never as a bay — bay is only the obtuse side now.
+function cornerKind(ang){
+  const dev=P.settings.bayDeviation;
+  const acute=ang<=90-dev;
+  return {acute, bay:!acute && Math.abs(ang-90)>=dev};
+}
+// materialList() row name: the style's miter, split inside/outside so the crew loads the right ones
+function miterPart(gms,c){
+  const part=gms.miterKey ? gms.miterLabel : (c.bay?"Bay miter":(P.settings.regularMiter==="strip"?"Strip miter":"Box miter"));
+  return part+(c.inside?" — inside":" — outside");
+}
+
+/* corners of a gutter run -> classification. A turn toward the front is concave (inside miter);
+   a turn away from it points out from the house (outside). */
+function runCorners(run,fronts){
   const out=[];
   const s=P.settings;
   const pts=run.pts;
-  for(let i=1;i<pts.length-1;i++){
-    const ang=angleAtDeg(pts[i-1],pts[i],pts[i+1]);
-    if(ang>=s.straightMax) continue; // basically straight, not a corner
-    const bay = Math.abs(ang-90) >= s.bayDeviation;
-    out.push({i, ang, bay, pt:pts[i]});
-  }
+  const f=(fronts||runFronts()).get(run.id)||1;
+  const corner=(a,b,c,i)=>{
+    const ang=angleAtDeg(a,b,c);
+    if(ang>=s.straightMax) return; // basically straight, not a corner
+    const turn=cross2({x:b.x-a.x,y:b.y-a.y},{x:c.x-b.x,y:c.y-b.y});
+    out.push({i, ang, ...cornerKind(ang), inside:turn*f<0, pt:b});
+  };
+  for(let i=1;i<pts.length-1;i++) corner(pts[i-1],pts[i],pts[i+1],i);
   // closed loop: the shared start/end vertex is also a corner
-  if(isClosedRun(run)){
-    const ang=angleAtDeg(pts[pts.length-2], pts[0], pts[1]);
-    if(ang<s.straightMax){
-      out.push({i:0, ang, bay:Math.abs(ang-90)>=s.bayDeviation, pt:pts[0]});
-    }
-  }
+  if(isClosedRun(run)) corner(pts[pts.length-2], pts[0], pts[1], 0);
   return out;
 }
 
@@ -1379,8 +1471,9 @@ function runCorners(run){
    mitres at those junctions just as it would mid-run. runCorners() only sees inside one run,
    so these are gathered globally and counted once in compute(). */
 const MIN_CORNER_DEG=1;   // below this two arms leave on the same bearing — overlap, not a corner
-function junctionCorners(){
+function junctionCorners(fronts){
   const s=P.settings, out=[];
+  fronts=fronts||runFronts();
   // every gutter arm leaving an endpoint. A closed run contributes both of its arms, so a
   // branch landing on a loop's shared vertex is seen — the loop's own corner there is then
   // discounted below so it isn't billed twice.
@@ -1388,8 +1481,10 @@ function junctionCorners(){
   for(const o of P.objects){
     if(o.t!=="gutter"||!o.pts||o.pts.length<2) continue;
     const L=o.pts.length-1;
-    ends.push({o, pt:o.pts[0], nb:o.pts[1], loop:isClosedRun(o)});
-    ends.push({o, pt:o.pts[L], nb:o.pts[L-1], loop:isClosedRun(o)});
+    // n = the arm's front normal, from its segment in the run's own point order
+    const f=fronts.get(o.id)||1;
+    ends.push({o, pt:o.pts[0], nb:o.pts[1], loop:isClosedRun(o), n:frontNormal(o.pts[0],o.pts[1],f)});
+    ends.push({o, pt:o.pts[L], nb:o.pts[L-1], loop:isClosedRun(o), n:frontNormal(o.pts[L-1],o.pts[L],f)});
   }
   const used=new Array(ends.length).fill(false);
   for(let i=0;i<ends.length;i++){
@@ -1410,20 +1505,26 @@ function junctionCorners(){
     // bill the junction to the largest style present so the result can't depend on draw order
     const rank=o=>GUTTER_STYLES.findIndex(g=>g.id===gutterSizeFor(o));
     const run=cl.map(e=>e.o).sort((a,b)=> (rank(b)-rank(a)) || String(a.id).localeCompare(String(b.id)))[0];
-    let angs;
+    // A sector is inside when the front of the arm bounding it faces into the sector's side —
+    // the same turn-toward-the-front rule runCorners uses, put in terms of arms leaving a point.
+    const arm=e=>({x:e.nb.x-e.pt.x, y:e.nb.y-e.pt.y});
+    let secs;
     if(cl.length===2){
-      angs=[angleAtDeg(cl[0].nb, pt, cl[1].nb)];        // same measure runCorners uses
+      const u1=arm(cl[0]), u2=arm(cl[1]);
+      secs=[{ang:angleAtDeg(cl[0].nb, pt, cl[1].nb),        // same measure runCorners uses
+             inside:Math.sign(cross2(u1,cl[0].n))===Math.sign(cross2(u1,u2))}];
     } else {
       // 3+ arms meet: the sectors between neighbouring bearings are the corners
-      const bear=cl.map(e=>Math.atan2(e.nb.y-e.pt.y, e.nb.x-e.pt.x)).sort((a,b)=>a-b);
-      angs=bear.map((b,k)=>{ let d=bear[(k+1)%bear.length]-b; if(d<0) d+=Math.PI*2; return d*180/Math.PI; })
-               .sort((a,b)=>Math.abs(a-90)-Math.abs(b-90));   // most corner-like sectors first
+      const arms=cl.map(e=>({e,b:Math.atan2(e.nb.y-e.pt.y, e.nb.x-e.pt.x)})).sort((a,b)=>a.b-b.b);
+      secs=arms.map((a,k)=>{ let d=arms[(k+1)%arms.length].b-a.b; if(d<0) d+=Math.PI*2;
+                            return {ang:d*180/Math.PI, inside:cross2(arm(a.e),a.e.n)>0}; })
+               .sort((a,b)=>Math.abs(a.ang-90)-Math.abs(b.ang-90));   // most corner-like sectors first
     }
     let made=0;
-    for(const ang of angs){
+    for(const {ang,inside} of secs){
       if(made>=budget) break;
       if(ang>=s.straightMax || ang<MIN_CORNER_DEG) continue;   // straight, or two arms overlapping
-      out.push({pt, ang, bay:Math.abs(ang-90)>=s.bayDeviation, run});
+      out.push({pt, ang, ...cornerKind(ang), inside, run});
       made++;
     }
   }
@@ -1481,10 +1582,11 @@ function compute(){
   const q={diverters:+s.diverters||0, valley:0,
     splashPlastic:0, splashConcrete:0,
     leaf6:+s.leafGuard6||0, leaf5:+s.leafGuard5||0,
-    strip:0,box:0,bay:0};
+    strip:0,box:0,bay:0,acute:0};
   GUTTER_STYLES.forEach(g=>{ q[g.priceKey]=0; q[g.endKey]=0; if(g.miterKey) q[g.miterKey]=0; });
   DS_STYLES.forEach(d=>{ q[d.priceKey]=0; q[d.outletKey]=0; q[d.elbowKey]=0; q[d.offsetKey]=0; });
   let corners=0;
+  const fronts=runFronts();   // once per takeoff — runCorners/junctionCorners would each re-derive it
   // one aggregate per custom product; `mode` decides whether it bills by the foot or each
   const customAgg={};
   const newCustomAgg=(pid,prod,o,mode)=>({id:pid,name:prod?prod.name:"Custom",rate:prod?(+prod.pricePerFoot||0):0,
@@ -1500,12 +1602,13 @@ function compute(){
       const gs=gutterStyle(gutterSizeFor(o));
       q[gs.priceKey]+=ft;
       // corners
-      const cs=runCorners(o);
+      const cs=runCorners(o,fronts);
       for(const c of cs){
         corners++;
         if(gs.miterKey) q[gs.miterKey]++;        // 6"HR & 7"K: their own special miter strip
         else if(c.bay) q.bay++;
         else if(s.regularMiter==="strip") q.strip++; else q.box++;
+        if(c.acute) q.acute++;                   // on top of the regular miter, never instead of it
       }
       // end caps: only on free (open) ends; corners/junctions/closed loops get none
       const fe=freeEnds(o);
@@ -1545,12 +1648,13 @@ function compute(){
     }
   }
   // corners where separate runs meet — outside the per-object loop, they belong to no one run
-  for(const c of junctionCorners()){
+  for(const c of junctionCorners(fronts)){
     corners++;
     const gms=gutterStyle(gutterSizeFor(c.run));
     if(gms.miterKey) q[gms.miterKey]++;
     else if(c.bay) q.bay++;
     else if(s.regularMiter==="strip") q.strip++; else q.box++;
+    if(c.acute) q.acute++;
   }
   // custom product rows + total cost (stroke-mode products round their aggregate footage).
   // Every row carries qty+unit so materialList() and the worksheet can print "ea" or "ft" without
@@ -1610,10 +1714,11 @@ function compute(){
     const itemizedSub = Object.values(amt).reduce((a,b)=>a+b,0);
     const leafAmount = q.leaf6*(+p.leaf6||0) + q.leaf5*(+p.leaf5||0);
     const splashAmount = q.splashPlastic*(+p.splashPlastic||0) + q.splashConcrete*(+p.splashConcrete||0);
+    const acuteAmount = q.acute*(+p.acute||0);   // an add-on, so flat mode charges it too
     let turnkey;
     if(s.pricingMode==="flat"){
       turnkey = gutterFootage*(+flatGut||0) + dsFootage*(+flatDs||0)
-                + leafAmount + splashAmount + customTotal + addOns + (+s.miscDemoLabor||0);
+                + leafAmount + splashAmount + acuteAmount + customTotal + addOns + (+s.miscDemoLabor||0);
     }else{
       turnkey = itemizedSub + customTotal + addOns + (+s.miscDemoLabor||0);
     }
@@ -1674,7 +1779,8 @@ function r1(n){ return Math.round((+n||0)*10)/10; }
 function materialList(){
   const r=compute(); const s=P.settings;
   const gut={}, gutParts={}, ds={}, dsParts={};
-  let valley=0, splashP=0, splashC=0;
+  let valley=0, splashP=0, splashC=0, acute=0;
+  const fronts=runFronts();
   const add=(map,key,base)=>{ if(!map[key]) map[key]=Object.assign({qty:0},base); return map[key]; };
   for(const o of P.objects){
     if(isExisting(o)) continue;   // must match compute() — existing gutter/ds are never billed
@@ -1686,9 +1792,10 @@ function materialList(){
       const ft=(o.lengths||[]).reduce((a,b)=>a+(+b||0),0);
       add(gut,size+"|"+k,{item:"Gutter "+size,unit:"ft",color:colorName,brand}).qty+=ft;
       const gms=gutterStyle(gutterSizeFor(o));
-      for(const c of runCorners(o)){
-        const part=gms.miterKey ? gms.miterLabel : (c.bay?"Bay miter":(s.regularMiter==="strip"?"Strip miter":"Box miter"));
+      for(const c of runCorners(o,fronts)){
+        const part=miterPart(gms,c);
         add(gutParts,part+"|"+k,{item:part,unit:"ea",color:colorName,brand}).qty+=1;
+        if(c.acute) acute++;
       }
       const fe=freeEnds(o); const cm=o.caps||[true,true];
       const cs=gutterStyle(gutterSizeFor(o)).short;
@@ -1711,20 +1818,32 @@ function materialList(){
     else if(o.t==="splash"){ if(o.material==="concrete") splashC++; else splashP++; }
   }
   // miters where separate runs meet, billed to the colour/brand of the run they join
-  for(const c of junctionCorners()){
+  for(const c of junctionCorners(fronts)){
     const gms=gutterStyle(gutterSizeFor(c.run));
     const colorName=c.run.color||s.gutterColor;
     const brand=effBrand(c.run);
-    const part=gms.miterKey ? gms.miterLabel : (c.bay?"Bay miter":(s.regularMiter==="strip"?"Strip miter":"Box miter"));
+    const part=miterPart(gms,c);
     add(gutParts,part+"|"+brand+"|"+colorName,{item:part,unit:"ea",color:colorName,brand}).qty+=1;
+    if(c.acute) acute++;
   }
   const gb=s.gutterBrand||"Spectra";
   const out=[];
   // each gutter/downspout row carries its own brand (per-object override or the job default)
   Object.values(gut).forEach(v=>out.push({item:v.item,qty:r1(v.qty),unit:v.unit,color:v.color,brand:v.brand}));
-  Object.values(gutParts).forEach(v=>out.push({item:v.item,qty:v.qty,unit:v.unit,color:v.color,brand:v.brand}));
+  // a miter's inside and outside rows are created in whatever order the corners were met (and
+  // junction miters come last), so pair them up: same part/brand/colour together, outside first
+  const partBase=v=>v.item.replace(/ — (inside|outside)$/,"")+"|"+v.brand+"|"+v.color;
+  const firstSeen=new Map();
+  Object.values(gutParts).forEach((v,i)=>{ const b=partBase(v); if(!firstSeen.has(b)) firstSeen.set(b,i); });
+  Object.values(gutParts)
+    .map((v,i)=>({v,i}))
+    .sort((a,b)=> (firstSeen.get(partBase(a.v))-firstSeen.get(partBase(b.v)))
+                  || (/ — inside$/.test(a.v.item)-/ — inside$/.test(b.v.item)) || (a.i-b.i))
+    .forEach(({v})=>out.push({item:v.item,qty:v.qty,unit:v.unit,color:v.color,brand:v.brand}));
   Object.values(ds).forEach(v=>out.push({item:v.item,qty:dsRound(v.qty),unit:v.unit,color:v.color,brand:v.brand}));
   Object.values(dsParts).forEach(v=>out.push({item:v.item,qty:v.qty,unit:v.unit,color:v.color,brand:v.brand}));
+  // the acute add-on is one style-less line, listed alongside the regular miter it sits on
+  if(acute) out.push({item:"Acute miter",qty:acute,unit:"ea",color:""});
   if(valley) out.push({item:"Valley shield",qty:valley,unit:"ea",color:""});
   if(+s.diverters) out.push({item:"Diverters",qty:+s.diverters,unit:"ea",color:s.gutterColor,brand:gb});
   if(+s.splashBlocks) out.push({item:"Splash blocks (legacy count)",qty:+s.splashBlocks,unit:"ea",color:""});
@@ -1769,6 +1888,7 @@ function segSegHit(a,b,c,d){
 let hover=null;
 // objId -> world anchor of the one product label its group of custom lines gets; rebuilt by drawScene
 let customTagOwner=new Map();
+let sceneFronts=new Map();   // runFronts() of the frame being drawn (set by drawScene)
 
 function roundRect(c,x,y,w,h,r){
   r=Math.min(r,w/2,h/2);
@@ -1787,18 +1907,54 @@ function drawScene(){
   const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,splash:4,item:4,stamp:5,text:6};
   const objs=[...P.objects].sort((a,b)=>(order[a.t]||9)-(order[b.t]||9));
   customTagOwner=customTagOwners();   // re-derived here, so the PDF replay groups exactly as the canvas does
+  sceneFronts=runFronts();            // same: one pass for every corner and downspout arrow in this frame
   for(const o of P.objects) if(o.t==="underlay" && o.print) drawUnderlay(o);   // under everything, and it prints
   for(const o of objs) drawObject(o);
 
   // miters where separate runs meet: painted once here, since they belong to no single object.
   // A T-junction bills two miters at one point — fan them apart so the count stays visible.
-  const jseen={};
-  for(const c of junctionCorners()){
+  for(const {c,sp} of junctionMarkSpots()) drawMiterMark(sp, c.bay);
+}
+// where each junction miter is painted — fanned apart, shared by drawScene and the I/O overlay
+function junctionMarkSpots(){
+  const jseen={}, out=[];
+  for(const c of junctionCorners(sceneFronts)){
     const sp=worldToScreen(c.pt), k=Math.round(sp.x)+","+Math.round(sp.y);
     const n=(jseen[k]=(jseen[k]||0)+1)-1;
     if(n){ const a=n*2.0944; sp.x+=Math.cos(a)*wpx(9); sp.y+=Math.sin(a)*wpx(9); }
-    drawMiterMark(sp, c.bay);
+    out.push({c,sp});
   }
+  return out;
+}
+/* Inside/outside letters on every miter mark, plus front-edge ticks on the selected run. Editor
+   chrome only (called from draw(), not drawScene()), so the printed diagram is unchanged: the
+   counts reach the PDF through the material list instead. */
+function drawCornerSides(){
+  const k=cam.scale;
+  if(k<0.35) return;   // the marks are specks this far out; letters would only be noise
+  ctx.save();
+  ctx.font="bold "+Math.max(6,8*k)+"px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillStyle="#fff";
+  const letter=(sp,c)=>ctx.fillText(c.inside?"I":"O", sp.x, sp.y+0.5*k);
+  for(const o of P.objects){
+    if(o.t!=="gutter"||isExisting(o)) continue;
+    for(const c of runCorners(o,sceneFronts)) letter(worldToScreen(c.pt),c);
+  }
+  for(const {c,sp} of junctionMarkSpots()) letter(sp,c);
+  const one=sel.size===1 ? objById([...sel][0]) : null;
+  if(one && one.t==="gutter"){
+    const f=sceneFronts.get(one.id)||1;
+    ctx.strokeStyle="rgba(43,127,208,.75)"; ctx.lineWidth=1.5;
+    for(let i=0;i<one.pts.length-1;i++){
+      const a=worldToScreen(one.pts[i]), b=worldToScreen(one.pts[i+1]), n=frontNormal(a,b,f);
+      const len=dist(a,b), step=Math.max(18, GRID*2*k), cnt=Math.max(1,Math.floor(len/step));
+      for(let j=0;j<cnt;j++){
+        const t=(j+0.5)/cnt, x=a.x+(b.x-a.x)*t, y=a.y+(b.y-a.y)*t;
+        ctx.beginPath(); ctx.moveTo(x+n.x*5,y+n.y*5); ctx.lineTo(x+n.x*11,y+n.y*11); ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
 }
 
 draw = function(){
@@ -1816,6 +1972,7 @@ draw = function(){
   // a plan the rep isn't printing sits under the scene here, outside drawScene() — see drawUnderlay
   for(const o of P.objects) if(o.t==="underlay" && !o.print) drawUnderlay(o);
   drawScene();
+  drawCornerSides();
 
   // in-progress drawing
   drawInProgress();
@@ -1990,7 +2147,7 @@ function drawGutter(o){
   // No end-cap tick at free ends: reps found it noise on the diagram. Caps are still counted and
   // billed off freeEnds() in compute()/materialList(), and toggled per end from the Select optbar.
   // corner miter markers
-  for(const c of runCorners(o)) drawMiterMark(worldToScreen(c.pt), c.bay);
+  for(const c of runCorners(o,sceneFronts)) drawMiterMark(worldToScreen(c.pt), c.bay);
   // segment length chips
   for(let i=0;i<o.pts.length-1;i++){
     const a=pts[i], b=pts[i+1];
@@ -2102,6 +2259,21 @@ function drawCustom(o){
   drawVertexHandles(o,pts);
 }
 
+/* the gutter a downspout hangs on (nearest segment within 2 grid squares) and that segment's front
+   normal. Derived every draw — a downspout stores no link to its run, so moving either one just works. */
+function dsFrontOf(o){
+  let best=null, bd=GRID*2;
+  for(const g of P.objects){
+    if(g.t!=="gutter"||!g.pts) continue;
+    for(let i=0;i<g.pts.length-1;i++){
+      const d=ptSegDist(o,g.pts[i],g.pts[i+1]);
+      if(d<bd){ bd=d; best={run:g,i}; }
+    }
+  }
+  if(!best) return null;
+  const f=(sceneFronts.get(best.run.id)||runFronts().get(best.run.id)||1);
+  return {run:best.run, n:frontNormal(best.run.pts[best.i],best.run.pts[best.i+1],f)};
+}
 function drawDS(o){
   const s=worldToScreen(o);
   const col=o.existing ? EXISTING_COL : colorHex(o.color||P.settings.downspoutColor,effBrand(o));
@@ -2114,22 +2286,40 @@ function drawDS(o){
   // downspout square (colored)
   roundRect(ctx,s.x-6*k,s.y-6*k,12*k,12*k,2.5*k);ctx.fillStyle=col;ctx.fill();ctx.lineWidth=Math.max(0.75,1.5*k);ctx.strokeStyle="#1b2530";ctx.stroke();
   if(sel.has(o.id)){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=Math.max(1,2*k);ctx.beginPath();ctx.arc(s.x,s.y,13*k,0,7);ctx.stroke(); }
+  // front arrow: points at the face of the gutter it hangs on, the way reps mark a manual takeoff.
+  // It prints (drawScene) and shows the derived front side, so a wrong guess is visible on the
+  // drawing; tapping it flips that run's group (see flipFront).
+  const fr=o.existing ? null : dsFrontOf(o);
+  if(fr){
+    const n=fr.n, r0=10*k, r1=17*k, hw=4.5*k;
+    ctx.beginPath();
+    ctx.moveTo(s.x+n.x*r1, s.y+n.y*r1);
+    ctx.lineTo(s.x+n.x*r0-n.y*hw, s.y+n.y*r0+n.x*hw);
+    ctx.lineTo(s.x+n.x*r0+n.y*hw, s.y+n.y*r0-n.x*hw);
+    ctx.closePath(); ctx.fillStyle="#1b2530"; ctx.fill();
+  }
   ctx.restore();
-  // notation chip below
+  // notation chip below — pushed down clear of an arrow pointing that way (the front of the house
+  // is usually drawn at the bottom, so this is the common case, not the odd one)
+  const dropY = (fr && fr.n.y>0.5) ? 9*k : 0;
   const d=parseDS(o.notation);
   const label=(o.notation&&o.notation.trim())?o.notation.trim().toUpperCase():(o.existing?"EXISTING":"(1 outlet)");
   const _dsz=chipPx(11);
-  const box=segChip(o,"note",s.x,s.y+20*k,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
+  const box=segChip(o,"note",s.x,s.y+20*k+dropY,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
   addLabelBox("dsnote",o.id,box.x,box.y,box.w,box.h);
   // the rep's free-text note ("next to brick"), kept apart from the notation so parseDS never
   // has to skip words. Drawn in drawScene, so it prints; own offset so it can be dragged clear.
   const memo=String(o.memo||"").trim();
   if(memo){
     const _msz=chipPx(9.5);
-    const mbox=segChip(o,"memo",s.x,s.y+36*k,memo,{size:_msz,pad:Math.max(2,_msz*0.42),bg:"#fffbe6",fg:"#1b2530",bc:"#c9a227",font:"Arial"});
+    const mbox=segChip(o,"memo",s.x,s.y+36*k+dropY,memo,{size:_msz,pad:Math.max(2,_msz*0.42),bg:"#fffbe6",fg:"#1b2530",bc:"#c9a227",font:"Arial"});
     addLabelBox("dsmemo",o.id,mbox.x,mbox.y,mbox.w,mbox.h);
   }
   addLabelBox("obj",o.id,s.x-9*k,s.y-9*k,18*k,18*k);
+  if(fr){   // a finger-sized target on the arrow, registered after the marker so it wins
+    const cx=s.x+fr.n.x*13.5*k, cy=s.y+fr.n.y*13.5*k, hs=Math.max(11,6*k);
+    addLabelBox("dsfront",o.id,cx-hs,cy-hs,hs*2,hs*2);
+  }
   // size tag — draggable like the notation chip, so it can be moved off a crowded
   // corner of the diagram. Registered last so it wins the hit test over the marker.
   // Off unless the job asks for it: with a spout every few feet the tags crowd the drawing,
@@ -2394,6 +2584,7 @@ function legendItems(){
     } else if(o.t==="ds"){
       if(o.existing){ add("existing",{k:"existing",label:"Existing (stays)"}); continue; }
       add("ds",{k:"ds",label:"Downspout",color:colorHex(s.downspoutColor,downspoutBrand())});
+      if(dsFrontOf(o)) add("dsfront",{k:"dsfront",label:"Arrow faces gutter front"});
       if(String(o.notation||"").trim()) add("dsnote",{k:"chip",text:"AB 20",label:"A/B elbows · ft of pipe"});
     } else if(o.t==="valley") add("valley",{k:"chip",text:"VS",bg:"#ff8a00",fg:"#fff",label:"Valley shield"});
     else if(o.t==="splash") add("splash",{k:"chip",text:"SB",bg:"#2f6fd0",fg:"#fff",label:"Splash block"});
@@ -2421,6 +2612,7 @@ function legendSwatchSVG(it){
     case "dash":     return box(`<line x1="2" y1="7" x2="22" y2="7" stroke="rgba(20,30,40,.45)" stroke-width="6" stroke-linecap="round"/><line x1="2" y1="7" x2="22" y2="7" stroke="${e(it.color)}" stroke-width="4" stroke-dasharray="6 3"/>`);
     case "band":     return box(`<line x1="3" y1="7" x2="21" y2="7" stroke="${e(it.color)}" stroke-opacity=".38" stroke-width="10" stroke-linecap="round"/>`);
     case "ds":       return box(`<circle cx="12" cy="7" r="6" fill="#fff" stroke="#1b2530" stroke-width="1.8"/><rect x="8" y="3" width="8" height="8" rx="1.8" fill="${e(it.color)}" stroke="#1b2530" stroke-width="1.1"/>`);
+    case "dsfront":  return box(`<circle cx="12" cy="5" r="4" fill="#fff" stroke="#1b2530" stroke-width="1.4"/><path d="M12 13.5 L9 9.6 L15 9.6 Z" fill="#1b2530"/>`);
     case "miter":    return box(`<rect x="7" y="2" width="10" height="10" rx="2" fill="#33455a" stroke="#fff" stroke-width="1.3"/>`);
     case "bay":      return box(`<path d="M12 1 L18 7 L12 13 L6 7 Z" fill="#ff8a00" stroke="#fff" stroke-width="1.3"/>`);
     case "chip": {
@@ -3298,6 +3490,7 @@ function buildOptbar(){
         + g('<label>Style</label><select id="opSelGutSize"><option value="">Job default</option>'+GUTTER_STYLES.map(st=>'<option value="'+st.id+'"'+(one.size===st.id?' selected':'')+'>'+st.short+'</option>').join("")+'</select>')
         + g('<label>'+capChk(0)+' '+capLbl(0,'Start cap')+'</label>')
         + g('<label>'+capChk(1)+' '+capLbl(1,'End cap')+'</label>')
+        + g('<button class="chip" id="opSelFlipFront" title="Which side faces away from the house — decides inside vs outside miters for this run and every run joined to it">⇄ Flip front</button>')
         + g('<label title="Homeowner\'s existing gutter — drawn grey dashed, not priced"><input type="checkbox" id="opSelExisting" '+(one.existing?"checked":"")+'> Existing</label>') + dv;
     } else if(one && one.t==="stamp"){
       h+= g('<label>Stamp color</label><span class="swatch" id="opSelSw" style="background:'+(one.color||'#c8202a')+'"></span><button class="chip" id="opSelStampCol">Color…</button>') + dv;
@@ -3415,6 +3608,7 @@ function wireOptbar(){
   };
   if(byId("opSelGutColor")) byId("opSelGutColor").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); o.color=e.target.value||null; if(byId("opSelSw"))byId("opSelSw").style.background=colorHex(o.color||P.settings.gutterColor,effBrand(o)); refreshAll(); } };
   if(byId("opSelGutSize")) byId("opSelGutSize").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); o.size=e.target.value||null; refreshAll(); } };
+  if(byId("opSelFlipFront")) byId("opSelFlipFront").onclick=()=>{ flipFront(selOne()); };
   if(byId("opSelCap0")) byId("opSelCap0").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); o.caps=o.caps||[true,true]; o.caps[0]=e.target.checked; refreshAll(); } };
   if(byId("opSelCap1")) byId("opSelCap1").onchange=e=>{ const o=selOne(); if(o){ recordHistory(); o.caps=o.caps||[true,true]; o.caps[1]=e.target.checked; refreshAll(); } };
   if(byId("opSelStampCol")) byId("opSelStampCol").onclick=()=>{ const o=selOne(); if(o) pickColor("Stamp color",o.color,c=>{ recordHistory(); o.color=c; if(byId("opSelSw"))byId("opSelSw").style.background=c; refreshAll(); }); };
@@ -3763,6 +3957,7 @@ function applyGesture(){
 }
 
 function onDown(e){
+  finishCamGlide();
   lastPtrType=e.pointerType||"mouse";
   if(e.pointerType==="touch"){
     activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
@@ -4100,6 +4295,13 @@ function onUp(e){
         // click: edit label, select a single segment, or select an object
         if(press.hit && EDITABLE.has(press.hit.kind)){ openEditorFor(press.hit); }
         else if(press.hit && press.hit.kind==="text" && press.wasSelectedText){ openEditorFor(press.hit); }
+        else if(press.hit && isDoubleTap(press.hit,press.pt)){ centerOnHit(press.hit); }
+        else if(press.hit && press.hit.kind==="dsfront"){
+          // tapping a downspout's arrow turns its gutter (and everything joined to it) around
+          const d=objById(press.hit.objId), fr=d&&dsFrontOf(d);
+          sel=new Set([press.hit.objId]); segSel.clear();
+          if(fr){ flipFront(fr.run); setHint("Front flipped — the arrow and every inside/outside miter on that gutter turned around."); }
+        }
         else if(press.hit){
           if(!e.shiftKey){ sel.clear(); segSel.clear(); }
           if(e.shiftKey && sel.has(press.hit.objId)) sel.delete(press.hit.objId); else sel.add(press.hit.objId);
@@ -4111,6 +4313,7 @@ function onUp(e){
     } else if(press.mode==="moveLabel"){
       if(!press.moved){
         if(press.hit && EDITABLE.has(press.hit.kind)) openEditorFor(press.hit);
+        else if(press.hit && isDoubleTap(press.hit,press.pt)) centerOnHit(press.hit);
         // the size tag has nothing to edit, so a tap selects its downspout instead
         else if(press.hit && press.hit.kind==="dssize"){
           if(!e.shiftKey){ sel.clear(); segSel.clear(); }
@@ -4214,6 +4417,33 @@ function onUp(e){
   }
 }
 
+/* Double-tap anything with Select -> it glides to the middle of the view. Counted from our own taps
+   rather than dblclick, which an iPad tap doesn't reliably fire. Editable chips and text boxes
+   already centre when their editor opens, so they never reach this. */
+let lastTap=null;   // {t,objId,x,y}
+function isDoubleTap(hit,pt){
+  const now=performance.now(), prev=lastTap;
+  lastTap={t:now,objId:hit.objId,x:pt.x,y:pt.y};
+  if(prev && prev.objId===hit.objId && now-prev.t<350 && Math.hypot(pt.x-prev.x,pt.y-prev.y)<30){ lastTap=null; return true; }
+  return false;
+}
+function centerOnHit(hit){
+  const o=objById(hit.objId); if(!o) return;
+  // a dragged-off tag centres itself; anything else (a run, a marker, its arrow) centres the object
+  if(hit.box && hit.kind!=="obj" && hit.kind!=="dsfront"){ centerScreenPoint(hit.box.x+hit.box.w/2, hit.box.y+hit.box.h/2); return; }
+  // tap-placed markers centre on the marker itself — objBounds pads them for the chips underneath
+  if(o.t==="ds"||o.t==="valley"||o.t==="splash"||o.t==="item"||o.t==="stamp"){ const c=worldToScreen(o); centerScreenPoint(c.x,c.y); return; }
+  const b=objBounds(o); if(!b) return;
+  const c=worldToScreen({x:b.x+b.w/2, y:b.y+b.h/2});
+  centerScreenPoint(c.x,c.y);
+}
+// glide so a screen point lands mid-view, counting whatever a glide in flight still has to move it
+function centerScreenPoint(sx,sy){
+  const mx=camGlide?(cam.x-camGlide.tx)*cam.scale:0, my=camGlide?(cam.y-camGlide.ty)*cam.scale:0;
+  const dx=sx+mx-view.w/2, dy=sy+my-view.h/2;
+  if(Math.hypot(dx,dy)<4) return;
+  glideCam(dx/cam.scale, dy/cam.scale);
+}
 function onDbl(e){
   if(drawing&&drawing.t==="gutter"){ finishGutter(); return; }
   if(drawing&&drawing.t==="custom"){ finishCustom(); return; }
@@ -4318,6 +4548,7 @@ function startCalibration(){
 }
 
 function onWheel(e){
+  finishCamGlide();
   e.preventDefault();
   const pt=evtPos(e);
   const before=screenToWorld(pt);
@@ -4668,9 +4899,25 @@ function openEditorFor(hit){
   // measure
   requestAnimationFrame(()=>{
     const fw=FE.offsetWidth, fh=FE.offsetHeight;
-    left=Math.min(Math.max(6,lb.x+lb.w/2-fw/2), stage.clientWidth-fw-6);
-    top=Math.min(Math.max(56,lb.y-4), stage.clientHeight-fh-6);
-    FE.style.left=left+"px"; FE.style.top=top+"px";
+    // A downspout's notation/memo chip, a gutter measurement or a text box off to the side glides to the middle of the view: its keypad
+    // opens below it, and near an edge the clamp below pulled the editor away from its chip. The
+    // field is placed where the chip will land, then set back by the shift so the glide carries it.
+    // Gutter measurements do the same (Enter hops to the next one, which may be anywhere on the run).
+    // That hop can land while the last glide is still moving the drawing, so work from the chip's
+    // box this frame plus the screen distance (mx,my) that glide has left to carry it.
+    const cb=findLabel(hit.kind,hit.objId,hit.seg)||lb;
+    const mx=camGlide?(cam.x-camGlide.tx)*cam.scale:0, my=camGlide?(cam.y-camGlide.ty)*cam.scale:0;
+    let sx=0, sy=0;
+    if(hit.kind==="dsnote"||hit.kind==="dsmemo"||hit.kind==="seglen"||hit.kind==="text"){
+      sx=view.w/2-(cb.x+mx+cb.w/2); sy=view.h/2-(cb.y+my+cb.h/2);
+      // a tall text box centred would push its first lines (where the caret starts) off the top
+      if(hit.kind==="text" && cb.h>view.h*0.6) sy=80-(cb.y+my);
+      if(Math.hypot(sx,sy)<40){ sx=0; sy=0; }   // already about centred — don't nudge
+    }
+    left=Math.min(Math.max(6,cb.x+mx+sx+cb.w/2-fw/2), stage.clientWidth-fw-6);
+    top=Math.min(Math.max(56,cb.y+my+sy-4), stage.clientHeight-fh-6);
+    FE.style.left=(left-mx-sx)+"px"; FE.style.top=(top-my-sy)+"px";
+    if(sx||sy) glideCam(-sx/cam.scale,-sy/cam.scale);
     keepEditorVisible();
   });
   field.focus();
@@ -4714,23 +4961,79 @@ function openSeg(objId,segIdx){
    pans the camera up (the chip stays under its field) and Photos scroll the list; the Diagram
    pan is undone once the keyboard is gone and no editor is open. */
 let kbPanW=0;   // world units the camera was nudged for the keyboard (world, so a zoom can't skew the undo)
+/* The pan glides rather than snaps: the whole drawing jumping up to half a screen read as a glitch.
+   #floatEdit rides along by the same screen distance each frame, so the chip stays under its field.
+   A new pan mid-glide retargets (visualViewport fires several resizes while the keyboard slides in);
+   any pointer/zoom input finishes it instantly so the glide can't fight the rep's own pan. */
+let camGlide=null;   // {fx,fy,tx,ty,t0,raf}
+function glideCam(dxWorld,dyWorld){
+  const tx=(camGlide?camGlide.tx:cam.x)+dxWorld, ty=(camGlide?camGlide.ty:cam.y)+dyWorld;
+  if(camGlide) cancelAnimationFrame(camGlide.raf);
+  const g=camGlide={fx:cam.x,fy:cam.y,tx,ty,t0:performance.now(),raf:0};
+  const step=now=>{
+    if(camGlide!==g) return;
+    const t=Math.min(1,(now-g.t0)/260), ease=1-Math.pow(1-t,3);   // ease-out cubic
+    setGlide(g.fx+(g.tx-g.fx)*ease, g.fy+(g.ty-g.fy)*ease);
+    if(t<1) g.raf=requestAnimationFrame(step); else camGlide=null;
+  };
+  g.raf=requestAnimationFrame(step);
+}
+function glideCamY(dyWorld){ glideCam(0,dyWorld); }
+function setGlide(x,y){
+  const dx=x-cam.x, dy=y-cam.y; cam.x=x; cam.y=y;
+  if(FE.style.display!=="none"){
+    FE.style.left=((parseFloat(FE.style.left)||0)-dx*cam.scale)+"px";
+    FE.style.top=((parseFloat(FE.style.top)||0)-dy*cam.scale)+"px";
+  }
+  draw();
+}
+function finishCamGlide(){
+  if(!camGlide) return;
+  const g=camGlide; camGlide=null; cancelAnimationFrame(g.raf);
+  setGlide(g.tx,g.ty);
+}
+// Photos: the same glide for the list scroll. The field moves by the full amount even where the list
+// can't scroll any further (scrollTop just clamps), as the snap version did.
+let photoGlide=null;   // {sc,s0,s1,f0,f1,t0,raf}
+function glidePhotoScroll(dy){
+  const sc=byId("photoScroll"), g0=photoGlide;
+  if(g0) cancelAnimationFrame(g0.raf);
+  const s0=sc?sc.scrollTop:0, f0=parseFloat(FE.style.top)||0;
+  const g=photoGlide={sc,s0,s1:(g0?g0.s1:s0)-dy,f0,f1:(g0?g0.f1:f0)+dy,t0:performance.now(),raf:0};
+  const step=now=>{
+    if(photoGlide!==g) return;
+    const t=Math.min(1,(now-g.t0)/260), ease=1-Math.pow(1-t,3);
+    if(sc) sc.scrollTop=g.s0+(g.s1-g.s0)*ease;
+    FE.style.top=(g.f0+(g.f1-g.f0)*ease)+"px";
+    if(t<1) g.raf=requestAnimationFrame(step); else photoGlide=null;
+  };
+  g.raf=requestAnimationFrame(step);
+}
+// the rep's own touch or scroll lands the glide at once rather than fighting it
+function finishPhotoGlide(){
+  if(!photoGlide) return;
+  const g=photoGlide; photoGlide=null; cancelAnimationFrame(g.raf);
+  if(g.sc) g.sc.scrollTop=g.s1; FE.style.top=g.f1+"px";
+}
+if(byId("photoScroll")){ for(const ev of ["pointerdown","wheel"]) byId("photoScroll").addEventListener(ev,finishPhotoGlide,{capture:true,passive:true}); }
 function keyboardUp(){ const vv=window.visualViewport; return !!vv && window.innerHeight-vv.height>80; }
 function keepEditorVisible(){
   if(FE.style.display==="none" || !(editing||photoTextEditOpen)) return;
   const sr=byId("stage").getBoundingClientRect(), vv=window.visualViewport;
   const visTop=Math.max(0,(vv?vv.offsetTop:0)-sr.top)+6;
   const visBot=Math.min(sr.bottom, vv?vv.offsetTop+vv.height:window.innerHeight)-sr.top-8;
-  const top=parseFloat(FE.style.top)||0, fh=FE.offsetHeight;
+  // where the field will sit once any glide in flight lands, so a retarget doesn't count it twice
+  const top=editing ? (parseFloat(FE.style.top)||0)-(camGlide?(camGlide.ty-cam.y)*cam.scale:0)
+                    : (photoGlide ? photoGlide.f1 : parseFloat(FE.style.top)||0), fh=FE.offsetHeight;
   // negative = move up, by just enough to clear the keyboard — but never push its top off-screen
   const dy=Math.max(visBot-(top+fh), visTop-top);
   if(dy>=0) return;
-  if(editing){ cam.y-=dy/cam.scale; kbPanW-=dy/cam.scale; draw(); }
-  else { const sc=byId("photoScroll"); if(sc) sc.scrollTop-=dy; }   // at the end of the list it can't scroll; the field still moves
-  FE.style.top=(top+dy)+"px";
+  if(editing){ glideCamY(-dy/cam.scale); kbPanW-=dy/cam.scale; return; }   // the glide carries the field
+  glidePhotoScroll(dy);
 }
 function restoreKeyboardPan(){
   if(!kbPanW || editing || photoTextEditOpen || keyboardUp()) return;
-  cam.y-=kbPanW; kbPanW=0; draw();
+  glideCamY(-kbPanW); kbPanW=0;
 }
 // every other field (rail, modals): scroll its own scroll container until it clears the keyboard
 function revealFocusedField(){
@@ -4764,6 +5067,7 @@ const LINES = [
   {key:"strip",    label:"STRIP MITER",      kind:"ea", src:"auto"},
   {key:"box",      label:"BOX MITER",        kind:"ea", src:"auto"},
   {key:"bay",      label:"BAY MITER",        kind:"ea", src:"auto"},
+  {key:"acute",    label:"ACUTE MITER (ADD-ON)", kind:"ea", src:"auto"},
   ...GUTTER_STYLES.filter(g=>g.miterKey).map(g=>({key:g.miterKey, label:g.miterLabel.toUpperCase(), kind:"ea", src:"auto"})),
   ...DS_STYLES.map(d=>({key:d.elbowKey,     label:'ELBOWS '+d.short,        kind:"ea", src:"auto"})),
   ...DS_STYLES.map(d=>({key:d.offsetKey,    label:'OFFSET '+d.short,        kind:"ea", src:"auto"})),
@@ -5068,6 +5372,8 @@ function buildPricingPane(){
     // only lived in the itemized component list — so in flat mode there was no way to change them
     h+=`<div class="sec-h">Splash blocks <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ each</span></div>`;
     h+=`<div class="row2">${fld("Plastic $","pcSplashP",s.prices.splashPlastic,"number",'step="1" inputmode="decimal"')}${fld("Concrete $","pcSplashC",s.prices.splashConcrete,"number",'step="1" inputmode="decimal"')}</div>`;
+    // the acute add-on is charged on top of the flat footage price, so it needs its own field here too
+    h+=fld("Acute miter add-on $ each","pcAcute",s.prices.acute,"number",'step="1" inputmode="decimal"');
   } else {
     h+=`<div class="sec-h">Per-component unit prices</div>`;
     h+=`<div class="worksheet" style="margin-top:6px"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Component</div><div>Unit $</div></div>`;
@@ -5131,7 +5437,7 @@ function wirePricing(){
   // free text — rebuild so the pane's discount readout picks up the new label
   { const dn=byId("pcDiscName"); if(dn) dn.onchange=()=>{ s.discountName=dn.value.trim(); buildPricingPane(); refreshAll(); }; }
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
-  for(const [id,key] of [["pcSplashP","splashPlastic"],["pcSplashC","splashConcrete"]]){ const e=byId(id); if(e) e.onchange=()=>{ s.prices[key]=+e.value||0; refreshAll(); }; }
+  for(const [id,key] of [["pcSplashP","splashPlastic"],["pcSplashC","splashConcrete"],["pcAcute","acute"]]){ const e=byId(id); if(e) e.onchange=()=>{ s.prices[key]=+e.value||0; refreshAll(); }; }
   num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");num("pcAmex","amexFee");
   byId("panePricing").querySelectorAll("input.ws-price").forEach(inp=>{
     if(inp.hasAttribute("readonly")) return;     // AUTO components are derived, not hand-edited
@@ -7152,6 +7458,7 @@ function photoTextAt(ph,p,cw,chh,pctx){
 /* ============================================================ */
 function updateZoomLabel(){ const z=byId("zLabel"); if(z) z.textContent=Math.round(cam.scale*100)+"%"; }
 function zoomAt(factor){
+  finishCamGlide();
   const cx=view.w/2, cy=view.h/2;
   const before=screenToWorld({x:cx,y:cy});
   cam.scale=Math.max(.15,Math.min(6,cam.scale*factor));
