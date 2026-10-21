@@ -136,6 +136,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .ws-row{display:grid;grid-template-columns:1fr 52px 64px 70px;align-items:center;border-bottom:1px solid var(--line-2);min-height:30px}
 .ws-row:last-child{border-bottom:0}
 .ws-row.zero{opacity:.45}
+.ws-more{display:block;width:100%;border:0;border-top:1px solid var(--line-2);background:#f6f8fa;color:var(--text-soft);font-size:11px;font-weight:700;text-align:left;padding:7px 9px;cursor:pointer;touch-action:manipulation}
 .ws-row .ws-lbl{padding:4px 7px;font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:5px}
 .ws-row .ws-qty{padding:4px 6px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:600}
 .ws-row .ws-qty.editable{cursor:text}
@@ -1025,7 +1026,7 @@ function resize(){
 }
 window.addEventListener("resize",resize);
 window.addEventListener("orientationchange",()=>setTimeout(resize,150));
-if(window.visualViewport){ window.visualViewport.addEventListener("resize",()=>resize()); }
+if(window.visualViewport){ window.visualViewport.addEventListener("resize",()=>{ resize(); onKeyboardChange(); }); }
 // keep the canvas locked to the stage size at all times
 if(window.ResizeObserver){
   const ro = new ResizeObserver(()=>resize());
@@ -1818,6 +1819,7 @@ draw = function(){
 
   // in-progress drawing
   drawInProgress();
+  vertexDragChip();
   if(tool==="pages") drawPageFrames();
 
   // eraser cursor ring (Demo / Screen eraser mode)
@@ -1945,6 +1947,7 @@ function segChip(o,key,mx,my,text,opt){
   const off=labelOffsetOf(o,key);
   const ox=off?(off.x||0):0, oy=off?(off.y||0):0;
   const lx=mx+ox*cam.scale, ly=my+oy*cam.scale;
+  if(typeof key==="number" && vertexDragSegs(o).includes(key)) return {x:lx,y:ly,w:0,h:0};   // riding above the finger
   if(off && (Math.abs(ox)>1||Math.abs(oy)>1)){
     ctx.save();ctx.strokeStyle="rgba(60,72,88,.55)";ctx.lineWidth=1;ctx.setLineDash([3,3]);
     ctx.beginPath();ctx.moveTo(mx,my);ctx.lineTo(lx,ly);ctx.stroke();ctx.restore();
@@ -2061,14 +2064,16 @@ function drawVertexHandles(o,pts){
 function drawCustom(o){
   if(o.pts.length<1) return;
   const prodS=productOf(o.productId);
+  // the PRODUCT's color wins over o.color: runs used to stamp a copy at draw time, so recoloring
+  // the tool left every run already drawn in the old color. o.color is only a legacy fallback.
   if(o.stroke || strokeMode(prodS)){    // freehand stroke-mode custom product
-    paintStroke(o,(prodS&&prodS.color)||"#7a4fd6",strokeMode(prodS),prodS?prodS.name:"");
+    paintStroke(prodS&&prodS.color?{...o,color:prodS.color}:o,"#7a4fd6",strokeMode(prodS),prodS?prodS.name:"");
     return;
   }
   const pts=o.pts.map(worldToScreen);
   const isSel=sel.has(o.id);
   const prod=productOf(o.productId);
-  const col=o.color||(prod&&prod.color)||"#7a4fd6";
+  const col=(prod&&prod.color)||o.color||"#7a4fd6";
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="round";
   ctx.strokeStyle="rgba(20,30,40,.45)";ctx.lineWidth=wpx(7);line(pts);
@@ -2613,6 +2618,44 @@ function diagramSVG(frame){
     `<rect x="${f(vx)}" y="${f(vy)}" width="${f(vw)}" height="${f(vh)}" fill="#fff"/>${body}</svg>`;
 }
 
+/* Live length of the gutter/custom segment being drawn. It used to sit at the segment's midpoint,
+   which on a short drag is right under the finger, so the rep couldn't read what they were drawing.
+   Now it rides just above the pointer (higher for a finger than a mouse) at a fixed, readable
+   size — editor chrome, never printed — and adds the run's total once it has earlier segments. */
+function liveLengthChip(){
+  if(!P.settings.autoMeasure || !cursorW || !drawing || drawing.pts.length<1) return;
+  const pts=drawing.pts, last=pts[pts.length-1];
+  const ft=autoLen(last,cursorW); if(!(ft>0)) return;
+  let run=ft; for(let i=0;i<pts.length-1;i++) run+=autoLen(pts[i],pts[i+1]);
+  const txt=ftStr(ft)+(pts.length>1?"  ·  run "+ftStr(run):"");
+  chipAbovePointer(txt, worldToScreen(cursorW));
+}
+// a readable chip just above the finger/cursor at screen point c — shared by drawing and corner drags
+function chipAbovePointer(txt,c){
+  const lift=lastPtrType==="touch"?70:30, size=16;
+  // no room above (finger near the top edge): beside the finger instead, still clear of it
+  let x=c.x, y=c.y-lift;
+  if(y<size+8){ y=c.y; x = c.x>view.w/2 ? c.x-lift-40 : c.x+lift+40; }
+  const hw=(txt.length*size*0.62+12)/2;   // ~mono advance; keeps it on-screen at the side edges
+  x=Math.min(Math.max(x,hw+4),view.w-hw-4);
+  chip(txt,x,y,{size,pad:6,bold:true,bg:"#1b2530",fg:"#fff",bc:"#fff",bw:1.5});
+}
+/* Dragging a corner of a drawn run: the segment(s) meeting that corner lift their length chip
+   off the line and up above the finger (segChip skips them), then drop back to the line's middle
+   — and any offset the rep gave them — on release, since nothing about the chip was changed.
+   Auto-measure only: without it the stored lengths don't follow the drag, so there's nothing live. */
+function vertexDragSegs(o){
+  if(!vertexDrag || !P.settings.autoMeasure || (o && vertexDrag.o!==o)) return [];
+  const v=vertexDrag.o, idx=vertexDrag.idx, L=v.pts.length-1;
+  if(!v.lengths || (v.t!=="gutter"&&v.t!=="custom") || v.stroke) return [];
+  if(isClosedRun(v) && (idx===0||idx===L)) return [L-1,0];
+  return [idx-1,idx].filter(i=>i>=0&&i<L);
+}
+function vertexDragChip(){
+  const segs=vertexDragSegs(); if(!segs.length) return;
+  const v=vertexDrag.o;
+  chipAbovePointer(segs.map(i=>ftStr(v.lengths[i])).join("  ·  "), worldToScreen(v.pts[vertexDrag.idx]));
+}
 function drawInProgress(){
   if(!drawing) return;
   ctx.save();
@@ -2625,16 +2668,7 @@ function drawInProgress(){
     if(pts.length>1) line(pts);
     for(const p of drawing.pts.map(worldToScreen)){ ctx.fillStyle="#fff";ctx.strokeStyle="#1b2530";ctx.lineWidth=1.5;
       ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill();ctx.stroke(); }
-    // live measurement of the segment being drawn
-    if(P.settings.autoMeasure && cursorW && drawing.pts.length>=1){
-      const last=drawing.pts[drawing.pts.length-1];
-      const a=worldToScreen(last), b=worldToScreen(cursorW);
-      const ft=autoLen(last,cursorW);
-      if(ft>0){
-        const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
-        ctx.restore(); chip(ftStr(ft),mx,my,{size:chipPx(12),pad:Math.max(2,chipPx(12)*0.42),bold:true,bg:"#1b2530",fg:"#fff",bc:"#1b2530"}); ctx.save();
-      }
-    }
+    ctx.restore(); liveLengthChip(); ctx.save();
   } else if(drawing.t==="custom" && drawing.stroke){
     const prod=productOf(activeCustom);
     ctx.restore(); paintStroke({pts:drawing.pts,color:(prod&&prod.color),width:20},(prod&&prod.color)||"#7a4fd6",customStrokeMode(),prod&&prod.name); ctx.save();
@@ -2647,12 +2681,7 @@ function drawInProgress(){
     if(pts.length>1) line(pts); ctx.setLineDash([]);
     for(const p of drawing.pts.map(worldToScreen)){ ctx.fillStyle="#fff";ctx.strokeStyle="#1b2530";ctx.lineWidth=1.5;
       ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill();ctx.stroke(); }
-    if(P.settings.autoMeasure && cursorW && drawing.pts.length>=1){
-      const last=drawing.pts[drawing.pts.length-1];
-      const a=worldToScreen(last), b=worldToScreen(cursorW);
-      const ft=autoLen(last,cursorW);
-      if(ft>0){ const mx=(a.x+b.x)/2,my=(a.y+b.y)/2; ctx.restore(); chip(ftStr(ft),mx,my,{size:chipPx(12),pad:Math.max(2,chipPx(12)*0.42),bold:true,bg:"#1b2530",fg:"#fff",bc:"#1b2530"}); ctx.save(); }
-    }
+    ctx.restore(); liveLengthChip(); ctx.save();
   } else if(drawing.t==="arrow"&&cursorW){
     const a=worldToScreen(drawing.start),b=worldToScreen(cursorW);
     ctx.strokeStyle="#c8202a";ctx.lineWidth=wpx(2.4);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
@@ -3183,6 +3212,8 @@ function buildOptbar(){
       + g('<label>Material</label><select id="opSplashMat">'
           +'<option value="plastic"'+(mat==="plastic"?' selected':'')+'>Plastic — '+money(+pr.splashPlastic||0)+'</option>'
           +'<option value="concrete"'+(mat==="concrete"?' selected':'')+'>Concrete — '+money(+pr.splashConcrete||0)+'</option></select>')
+      // same price the Pricing tab edits (P.settings.prices), for whichever material is picked
+      + g('<label>$ each</label><input id="opSplashPrice" type="number" min="0" step="1" inputmode="decimal" value="'+(+pr[mat==="concrete"?"splashConcrete":"splashPlastic"]||0)+'" style="width:64px">')
       + '<span class="mini" style="color:var(--text-soft)">Tap to drop • each block can be switched later via Select</span>';
   } else if(tool==="custom"){
     const p=productOf(activeCustom)||{name:"Custom",pricePerFoot:0,color:"#c8202a"};
@@ -3330,7 +3361,7 @@ function wireOptbar(){
   if(byId("opQuiz")) byId("opQuiz").onclick=openJobQuiz;
   if(byId("opPlan")) byId("opPlan").onclick=openPlanModal;
   if(byId("opCustEdit")) byId("opCustEdit").onclick=()=>openCustomProduct(activeCustom);
-  if(byId("opCustCol")) byId("opCustCol").onclick=()=>{ const p=productOf(activeCustom); if(p) pickColor("Color for "+p.name,p.color,c=>{ p.color=c; if(byId("opCustSw"))byId("opCustSw").style.background=c; refreshAll(); }); };
+  if(byId("opCustCol")) byId("opCustCol").onclick=()=>{ const p=productOf(activeCustom); if(p) pickColor("Color for "+p.name,p.color,c=>{ recordHistory(); p.color=c; if(byId("opCustSw"))byId("opCustSw").style.background=c; refreshAll(); }); };
   if(byId("opDsSize")) byId("opDsSize").onchange=e=>{ dsDrawSize=e.target.value; };
   if(byId("opDsBrand")) byId("opDsBrand").onchange=e=>{
     P.settings.downspoutBrand=e.target.value;
@@ -3341,7 +3372,8 @@ function wireOptbar(){
   };
   if(byId("opDsColor")) byId("opDsColor").onchange=e=>{ dsDrawColor=e.target.value; byId("opDsSw").style.background=colorHex(e.target.value,downspoutBrand()); };
   if(byId("opDsShowSize")) byId("opDsShowSize").onchange=e=>{ P.settings.showDsSize=e.target.checked; buildOptbar(); refreshAll(); };
-  if(byId("opSplashMat")) byId("opSplashMat").onchange=e=>{ splashDrawMaterial=e.target.value; };
+  if(byId("opSplashMat")) byId("opSplashMat").onchange=e=>{ splashDrawMaterial=e.target.value; buildOptbar(); };   // rebuild: the $ field follows the material
+  if(byId("opSplashPrice")) byId("opSplashPrice").onchange=e=>{ ensurePrices(); P.settings.prices[splashDrawMaterial==="concrete"?"splashConcrete":"splashPlastic"]=Math.max(0,+e.target.value||0); buildOptbar(); refreshAll(); };
   if(byId("opSelSplashMat")) byId("opSelSplashMat").onchange=e=>{ const one=sel.size===1?objById([...sel][0]):null; if(one&&one.t==="splash"){ one.material=e.target.value; refreshAll(); } };
   wireTextStyleStrip();
   if(byId("opArrColor")) byId("opArrColor").oninput=e=>arrowColor=e.target.value;
@@ -4175,8 +4207,7 @@ function onUp(e){
       drawing=null;
     } else if(drawing.t==="custom" && drawing.stroke){
       if(drawing.pts.length>1){ recordHistory();
-        const prod=productOf(activeCustom);
-        P.objects.push({t:"custom",id:uid(),productId:activeCustom,stroke:true,pts:drawing.pts.slice(),width:20,color:(prod?prod.color:null)}); refreshAll(); }
+        P.objects.push({t:"custom",id:uid(),productId:activeCustom,stroke:true,pts:drawing.pts.slice(),width:20}); refreshAll(); }
       drawing=null;
     }
     draw();
@@ -4272,8 +4303,8 @@ function finishCustom(){
   const auto=P.settings.autoMeasure;
   let lengths=new Array(pts.length-1).fill("");
   if(auto){ for(let i=0;i<pts.length-1;i++) lengths[i]=autoLen(pts[i],pts[i+1]); }
-  const p=productOf(activeCustom);
-  const o={t:"custom",id:uid(),productId:activeCustom,pts,lengths,color:(p?p.color:null)};
+  // no color copy: the run takes its product's color at draw time, so recoloring the tool recolors it
+  const o={t:"custom",id:uid(),productId:activeCustom,pts,lengths};
   P.objects.push(o); sel=new Set([o.id]); drawing=null; refreshAll();
   if(!auto){ setTimeout(()=>openSeg(o.id,0),30); }
 }
@@ -4487,6 +4518,9 @@ function commitEditor(){
   FE.innerHTML="";
   const was=editing; editing=null;
   refreshAll();
+  // no keyboard event follows a keypad-only (dsnote) edit or a hardware keyboard, so check here;
+  // the delay lets a chained edit (seglen Enter → next segment) reopen before the view jumps back
+  setTimeout(restoreKeyboardPan,400);
   return was;
 }
 
@@ -4637,6 +4671,7 @@ function openEditorFor(hit){
     left=Math.min(Math.max(6,lb.x+lb.w/2-fw/2), stage.clientWidth-fw-6);
     top=Math.min(Math.max(56,lb.y-4), stage.clientHeight-fh-6);
     FE.style.left=left+"px"; FE.style.top=top+"px";
+    keepEditorVisible();
   });
   field.focus();
   if(field.select) field.select();
@@ -4673,6 +4708,44 @@ function openSeg(objId,segIdx){
   openEditorFor({objId,kind:"seglen",seg:segIdx,box:lb});
 }
 
+/* KEYBOARD AVOIDANCE — the iPad keyboard overlays the page (the layout viewport doesn't shrink),
+   so #floatEdit, placed on the chip being edited, often sat under it and the rep typed blind.
+   Only visualViewport knows the keyboard's top. When the editor would be covered, the Diagram
+   pans the camera up (the chip stays under its field) and Photos scroll the list; the Diagram
+   pan is undone once the keyboard is gone and no editor is open. */
+let kbPanW=0;   // world units the camera was nudged for the keyboard (world, so a zoom can't skew the undo)
+function keyboardUp(){ const vv=window.visualViewport; return !!vv && window.innerHeight-vv.height>80; }
+function keepEditorVisible(){
+  if(FE.style.display==="none" || !(editing||photoTextEditOpen)) return;
+  const sr=byId("stage").getBoundingClientRect(), vv=window.visualViewport;
+  const visTop=Math.max(0,(vv?vv.offsetTop:0)-sr.top)+6;
+  const visBot=Math.min(sr.bottom, vv?vv.offsetTop+vv.height:window.innerHeight)-sr.top-8;
+  const top=parseFloat(FE.style.top)||0, fh=FE.offsetHeight;
+  // negative = move up, by just enough to clear the keyboard — but never push its top off-screen
+  const dy=Math.max(visBot-(top+fh), visTop-top);
+  if(dy>=0) return;
+  if(editing){ cam.y-=dy/cam.scale; kbPanW-=dy/cam.scale; draw(); }
+  else { const sc=byId("photoScroll"); if(sc) sc.scrollTop-=dy; }   // at the end of the list it can't scroll; the field still moves
+  FE.style.top=(top+dy)+"px";
+}
+function restoreKeyboardPan(){
+  if(!kbPanW || editing || photoTextEditOpen || keyboardUp()) return;
+  cam.y-=kbPanW; kbPanW=0; draw();
+}
+// every other field (rail, modals): scroll its own scroll container until it clears the keyboard
+function revealFocusedField(){
+  const a=document.activeElement, vv=window.visualViewport;
+  if(!vv || !a || !/^(INPUT|TEXTAREA)$/.test(a.tagName) || FE.contains(a)) return;
+  const over=a.getBoundingClientRect().bottom+12-(vv.offsetTop+vv.height); if(over<=0) return;
+  for(let p=a.parentElement;p;p=p.parentElement){
+    if(/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight>p.clientHeight){ p.scrollTop+=over; return; }
+  }
+}
+function onKeyboardChange(){
+  if(keyboardUp()){ keepEditorVisible(); revealFocusedField(); }
+  else restoreKeyboardPan();
+}
+
 /* ============================================================ */
 /* LEFT RAIL — ESTIMATE / JOB / PRICING                       */
 /* ============================================================ */
@@ -4699,6 +4772,7 @@ const LINES = [
 
 function esc(s){ return (s==null?"":(""+s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
+let showUnusedLines=false;   // Estimate tab: unused worksheet lines are collapsed unless the rep opens them
 function buildEstimatePane(){
   const r=compute();
   const flat = P.settings.pricingMode==="flat";
@@ -4710,9 +4784,14 @@ function buildEstimatePane(){
   h+=`<div class="worksheet">`;
   h+=`<div class="ws-head"><div>Component</div><div>Qty</div>${flat?"":"<div>Unit</div><div>Amount</div>"}</div>`;
 
+  // Unused lines (nothing drawn / entered) collapse behind one toggle so the takeoff reads at a
+  // glance; hand-entered lines (diverters, leaf guard) are among them, so the toggle is how you reach them.
+  let unused="", nUnused=0;
   for(const L of LINES){
     const qty=r.q[L.key]||0;
+    const isUnused = !qty && !(L.src!=="auto" && +P.settings[L.src]);
     const zero = qty===0 ? " zero":"";
+    const h0=h; h="";
     const qtyTxt = L.kind==="ft" ? ftStr(qty) : (Math.round(qty*10)/10);
     let qtyCell;
     if(L.src!=="auto"){
@@ -4734,6 +4813,11 @@ function buildEstimatePane(){
       h+= (ncFree&&ncFree.has(L.key)&&qty) ? `<div class="ws-amt" title="New construction — not charged">$0 · NC</div>` : `<div class="ws-amt">${money(r.amt[L.key]||0)}</div>`;
     }
     h+=`</div>`;
+    if(isUnused){ unused+=h; nUnused++; h=h0; } else h=h0+h;
+  }
+  if(nUnused){
+    if(showUnusedLines) h+=unused;
+    h+=`<button class="ws-more" id="wsMore">${showUnusedLines?"▾ Hide":"▸ Show"} ${nUnused} unused item${nUnused===1?"":"s"}</button>`;
   }
   h+=`</div>`;
 
@@ -4784,6 +4868,7 @@ function buildEstimatePane(){
 
   pane.innerHTML=h;
 
+  if(byId("wsMore")) byId("wsMore").onclick=()=>{ showUnusedLines=!showUnusedLines; buildEstimatePane(); };
   pane.querySelectorAll("input.ws-qty-in").forEach(inp=>{
     inp.onchange=()=>{ P.settings[inp.dataset.setting]=+inp.value||0; refreshAll(); };
   });
@@ -4979,6 +5064,10 @@ function buildPricingPane(){
     h+=`<div class="row3">${fld("Gutter list $/ft","pcGutList",s.flatGutterList,"number",'step="0.25" inputmode="decimal"')}${fld("Gutter min $/ft","pcGutMin",s.flatGutterMin,"number",'step="0.25" inputmode="decimal"')}${fld("Gutter $/ft","pcGutRate",s.flatGutterRate,"number",'step="0.25" inputmode="decimal"')}</div>`;
     h+=`<div class="row3">${fld("Downspout list $/ft","pcDsList",s.flatDownspoutList,"number",'step="0.25" inputmode="decimal"')}${fld("Downspout min $/ft","pcDsMin",s.flatDownspoutMin,"number",'step="0.25" inputmode="decimal"')}${fld("Downspout $/ft","pcDsRate",s.flatDownspoutRate,"number",'step="0.25" inputmode="decimal"')}</div>`;
     h+=`<div class="note">Flat mode multiplies total gutter footage (including corner, outlet, and valley allowances) by your $/ft. Per-component prices are ignored. The <b>list</b> rates drive the discount percentage printed on the estimate; the <b>min</b> rates are a hard floor.</div>`;
+    // splash blocks are charged in flat mode too (compute()'s splashAmount), but their prices
+    // only lived in the itemized component list — so in flat mode there was no way to change them
+    h+=`<div class="sec-h">Splash blocks <span style="font-weight:600;color:var(--text-soft);font-size:11px">$ each</span></div>`;
+    h+=`<div class="row2">${fld("Plastic $","pcSplashP",s.prices.splashPlastic,"number",'step="1" inputmode="decimal"')}${fld("Concrete $","pcSplashC",s.prices.splashConcrete,"number",'step="1" inputmode="decimal"')}</div>`;
   } else {
     h+=`<div class="sec-h">Per-component unit prices</div>`;
     h+=`<div class="worksheet" style="margin-top:6px"><div class="ws-head" style="grid-template-columns:1fr 90px"><div>Component</div><div>Unit $</div></div>`;
@@ -5042,6 +5131,7 @@ function wirePricing(){
   // free text — rebuild so the pane's discount readout picks up the new label
   { const dn=byId("pcDiscName"); if(dn) dn.onchange=()=>{ s.discountName=dn.value.trim(); buildPricingPane(); refreshAll(); }; }
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
+  for(const [id,key] of [["pcSplashP","splashPlastic"],["pcSplashC","splashConcrete"]]){ const e=byId(id); if(e) e.onchange=()=>{ s.prices[key]=+e.value||0; refreshAll(); }; }
   num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");num("pcAmex","amexFee");
   byId("panePricing").querySelectorAll("input.ws-price").forEach(inp=>{
     if(inp.hasAttribute("readonly")) return;     // AUTO components are derived, not hand-edited
@@ -6607,6 +6697,7 @@ function openPhotoTextEditor(ph, mark, cv, V, cw, chh, isNew){
     const left=Math.min(Math.max(6,scrX+scrW/2-fw/2), stageEl.clientWidth-fw-6);
     const top=Math.min(Math.max(6,scrY-4), stageEl.clientHeight-fh-6);
     FE.style.left=left+"px"; FE.style.top=top+"px";
+    keepEditorVisible();
   });
   field.focus(); if(field.select) field.select();
 }
