@@ -12,6 +12,9 @@ import PDFKit
 ///                              shown in a PDFView laid over the tab. Share / Print hand
 ///                              off that same PDF data, so the customer is sent exactly
 ///                              the document they were shown.
+///   • PDF import            -> WKWebView can't rasterize a PDF, so a plan or an extra PDF
+///                              page arrives here as base64 and PDFKit renders each page
+///                              to a JPEG the web app keeps like a photo (gutterPdfImport).
 /// Loading a saved job uses the web app's <input type="file">, which WKWebView
 /// already supports with the system document picker — no bridge needed.
 struct WebView: UIViewRepresentable {
@@ -30,6 +33,7 @@ struct WebView: UIViewRepresentable {
         let ucc = config.userContentController
         ucc.add(context.coordinator, name: "gutterSave")
         ucc.add(context.coordinator, name: "gutterPdf")
+        ucc.add(context.coordinator, name: "gutterPdfImport")
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
@@ -88,7 +92,49 @@ struct WebView: UIViewRepresentable {
                 guard let d = message.body as? [String: Any],
                       let action = d["action"] as? String else { return }
                 handlePdf(action, d)
+            case "gutterPdfImport":
+                guard let d = message.body as? [String: Any],
+                      let id = d["id"] as? String,
+                      let b64 = d["data"] as? String else { return }
+                let maxEdge = CGFloat((d["maxEdge"] as? NSNumber)?.doubleValue ?? 2400)
+                importPdf(id: id, base64: b64, maxEdge: maxEdge)
             default: break
+            }
+        }
+
+        // MARK: PDF import -> page images
+
+        /// Renders every page (up to 30) to a JPEG no larger than `maxEdge` on its long side, off
+        /// the main thread, and hands each back as its own JS call: one evaluateJavaScript per page
+        /// keeps any single script string to one page's worth of base64. The web side assembles
+        /// them in pdfImportPage() and finishes on pdfImportDone() / pdfImportFailed().
+        private func importPdf(id: String, base64: String, maxEdge: CGFloat) {
+            let jsId = id.replacingOccurrences(of: "\\", with: "").replacingOccurrences(of: "'", with: "")
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let data = Data(base64Encoded: base64), let doc = PDFDocument(data: data),
+                      doc.pageCount > 0 else {
+                    DispatchQueue.main.async { self?.callJS("pdfImportFailed('\(jsId)','That file could not be read as a PDF.')") }
+                    return
+                }
+                let n = min(doc.pageCount, 30)
+                for i in 0..<n {
+                    guard let page = doc.page(at: i) else { continue }
+                    let box = page.bounds(for: .mediaBox)
+                    // bounds() is unrotated; thumbnail() applies the page's rotation and the PDF->UIKit
+                    // flip itself, so size the target box for the page as it's meant to be viewed
+                    let rot = abs(page.rotation) % 180 == 90
+                    let pw = rot ? box.height : box.width, ph = rot ? box.width : box.height
+                    let scale = min(maxEdge / max(pw, ph), 4)
+                    let size = CGSize(width: floor(pw * scale), height: floor(ph * scale))
+                    let img = page.thumbnail(of: size, for: .mediaBox)
+                    guard let jpg = img.jpegData(compressionQuality: 0.85) else { continue }
+                    let url = "data:image/jpeg;base64," + jpg.base64EncodedString()
+                    // thumbnail() may come back at screen scale (2x) — report the real pixel size
+                    let pxW = img.cgImage?.width ?? Int(size.width), pxH = img.cgImage?.height ?? Int(size.height)
+                    let js = "pdfImportPage('\(jsId)',\(i),\(n),'\(url)',\(pxW),\(pxH))"
+                    DispatchQueue.main.async { self?.callJS(js) }
+                }
+                DispatchQueue.main.async { self?.callJS("pdfImportDone('\(jsId)',\(n))") }
             }
         }
 

@@ -95,6 +95,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
 .opt-tab .opt-tot{font-weight:600;opacity:.85;font-variant-numeric:tabular-nums}
 .opt-tab .opt-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;background:rgba(255,255,255,.15);font-size:11px;line-height:1}
 .opt-tab .opt-x:hover{background:rgba(255,255,255,.3)}
+.opt-tab .opt-ren{font-size:12px;opacity:.8;margin-left:-3px}
 .opt-add{border:1px solid #2c4257;background:#16273600;color:#9fc0e0;border-radius:8px;padding:5px 9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
 .opt-add:hover{background:#1a2c3d}
 
@@ -172,6 +173,10 @@ input,select,textarea{font-family:inherit;font-size:13px}
 
 /* ---------- Center canvas ---------- */
 #stage{flex:1;position:relative;min-width:0;background:#aeb8c2;overflow:hidden}
+/* the legend arranger's copy of the PDF diagram box — same fill rule as the PDF's .dg svg */
+.lg-dg{position:absolute;inset:0}
+.lg-dg svg{position:absolute;left:0;top:0;width:100%;height:100%;display:block}
+#diagLegend{position:absolute;right:12px;bottom:62px;z-index:4;background:rgba(255,255,255,.94);border:1px solid #d9e0e7;border-radius:7px;padding:6px 9px;box-shadow:0 2px 8px rgba(0,0,0,.12);cursor:pointer;user-select:none;-webkit-user-select:none;max-height:45%;overflow:auto}
 #canvas{position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
 #railToggle{position:absolute;left:max(12px,env(safe-area-inset-left));bottom:calc(12px + env(safe-area-inset-bottom));z-index:25;width:32px;height:32px;border-radius:8px;border:1px solid #3a4d61;background:#2c3c4d;color:#dce6ef;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.25)}
 #diagUndoBar{position:absolute;left:calc(max(12px,env(safe-area-inset-left)) + 40px);bottom:calc(12px + env(safe-area-inset-bottom));z-index:25;display:flex;gap:6px}
@@ -448,13 +453,15 @@ input,select,textarea{font-family:inherit;font-size:13px}
     </div>
     <div class="tb-spacer"></div>
     <button id="saveWarn" title="Tap for details" style="display:none"></button>
-    <button class="tb-btn ghost" id="btnSettings" title="Job defaults, rates & rules">⚙ Settings</button>
+    <button class="tb-btn ghost" id="btnSettings" title="Your profile, takeoff rules & drawing settings">⚙ Settings</button>
     <button class="tb-btn ghost" id="btnNew">New</button>
     <button class="tb-btn ghost" id="btnLoad">Open</button>
     <button class="tb-btn" id="btnSave">Save</button>
     <button class="tb-btn primary" id="btnPrint">Print / PDF</button>
     <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
     <input type="file" id="photoInput" accept="image/*" multiple style="display:none">
+    <!-- plans + extra PDF pages: images, or PDFs rendered natively (see DOCUMENT IMPORT) -->
+    <input type="file" id="docInput" accept="image/*,application/pdf,.pdf" style="display:none">
     <!-- Separate input for the camera: `capture` jumps straight to the camera instead of the
          pick-a-source sheet, and iOS ignores it when `multiple` is also present. -->
     <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">  </div>
@@ -482,6 +489,8 @@ input,select,textarea{font-family:inherit;font-size:13px}
     <!-- CENTER STAGE -->
     <div id="stage">
       <canvas id="canvas"></canvas>
+      <!-- symbol key for what's on the drawing — see updateLegendOverlay(); tap to collapse -->
+      <div id="diagLegend" style="display:none"></div>
 
       <button id="railToggle" title="Hide / show panel">⟨</button>
 
@@ -589,6 +598,8 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <span id="pdfStatus"></span>
           <div class="tb-spacer"></div>
           <button class="tb-btn" id="pdfPagesBtn" title="Choose what each PDF diagram page shows">▭ Diagram pages</button>
+          <button class="tb-btn" id="pdfLegendBtn" title="Move or resize the legend on the PDF diagram">◳ Legend</button>
+          <button class="tb-btn" id="pdfExtraBtn" title="Add your own pages — a financing flyer, a brochure — from a PDF or image">＋ Pages</button>
           <button class="tb-btn" id="pdfRefresh" title="Rebuild the PDF">↻ Refresh</button>
           <button class="tb-btn" id="pdfSign" title="Customer or rep signs; press and hold a signature on the PDF to drag it">✍ Sign</button>
           <button class="tb-btn" id="pdfShare" title="Save to Files, Mail, AirDrop or another app">⇪ Share / Save</button>
@@ -706,7 +717,7 @@ const BOX_COLORS = ["#ffffff","#fde2e2","#ffe9cc","#fff7cc","#e2f4dd","#d9ecf7",
 
 function defaultProject(){
   return {
-    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:"",warrantyYears:"10",titleImage:"",signatures:[]},
+    meta:{name:"",address:"",gateCode:"",phone:"",cell:"",email:"",date:new Date().toISOString().slice(0,10),salesperson:"",salespersonPhone:"",salespersonEmail:"",warrantyYears:"10",titleImage:"",signatures:[],extraPages:[]},
     settings:{
       gutterType:"6K",            // default gutter style id (see GUTTER_STYLES)
       defaultDownspoutSize:"3x4", // default downspout size id (auto-follows the gutter style)
@@ -761,6 +772,9 @@ function defaultProject(){
       leafGuard6:0, leafGuard5:0,
       leafGuardType:"",
       defaultFont:"Arial",
+      showLegend:true,            // symbol legend in the diagram's corner (canvas + PDF)
+      newConstruction:false,      // end caps + outlets priced at $0 (still on the material list)
+      priceOverride:null,         // null = calculated price; a number replaces the turnkey total
       prices:{}                   // per-line unit prices (itemized)
     },
     objects:[],
@@ -778,7 +792,8 @@ function defaultPres(){
   return {
     notes:[],                     // {id,text} — printed per option, never priced
     terms:"",                     // "" = fall back to the standard generated disclaimer
-    pages:[]                      // PDF diagram page frames, world {x,y,w,h}; [] = auto-fit onto page 1
+    pages:[],                     // PDF diagram page frames, world {x,y,w,h}; [] = auto-fit onto page 1
+    legend:null                   // page-1 legend placement {x,y,s} (see legendPlaceStyle); null = bottom-left
   };
 }
 // Same job as ensurePrices: make any project (old save, hand-edited JSON, undo snapshot
@@ -790,8 +805,30 @@ function ensurePres(p){
     notes:Array.isArray(p.notes)?p.notes.filter(n=>n&&typeof n==="object").map(n=>({id:n.id||uid(),text:String(n.text||"")})):[],
     terms:typeof p.terms==="string"?p.terms:"",
     pages:Array.isArray(p.pages)?p.pages.filter(f=>f&&[f.x,f.y,f.w,f.h].every(v=>isFinite(+v))&&+f.w>0&&+f.h>0)
-      .slice(0,MAX_PDF_PAGES).map(f=>({x:+f.x,y:+f.y,w:+f.w,h:+f.h})):[]
+      .slice(0,MAX_PDF_PAGES).map(f=>({x:+f.x,y:+f.y,w:+f.w,h:+f.h})):[],
+    legend:ensureLegendPlace(p.legend)
   };
+}
+
+/* The rep's own name/phone/e-mail, typed once in Settings. Its own localStorage key, NOT part of
+   the job: it has to survive New and Open, and a job file handed to another rep must not carry
+   it. applyProfile() only fills blanks, so a job that already names its rep keeps that rep. */
+const PROFILE_KEY="primeGutterProfile";
+function loadProfile(){
+  try{ const p=JSON.parse(localStorage.getItem(PROFILE_KEY)||"null"); if(p&&typeof p==="object") return {name:String(p.name||""),phone:String(p.phone||""),email:String(p.email||"")}; }catch(e){}
+  return {name:"",phone:"",email:""};
+}
+function saveProfile(p){ try{ localStorage.setItem(PROFILE_KEY,JSON.stringify(p)); }catch(e){} }
+function applyProfile(meta){
+  const p=loadProfile(); if(!meta) return;
+  if(!String(meta.salesperson||"").trim()) meta.salesperson=p.name;
+  if(!String(meta.salespersonPhone||"").trim()) meta.salespersonPhone=p.phone;
+  if(!String(meta.salespersonEmail||"").trim()) meta.salespersonEmail=p.email;
+}
+// "Prepared by" on the PDF's customer card. One builder for buildEstimateHTML AND pdfBoxFor's
+// height model — if the two strings differ, page 1's diagram box is sized for the wrong card.
+function repLine(meta){
+  return [meta.salesperson,fmtPhone(meta.salespersonPhone),meta.salespersonEmail].map(v=>String(v||"").trim()).filter(Boolean).join("  ·  ");
 }
 
 let P = defaultProject();
@@ -1546,12 +1583,15 @@ function compute(){
   const dsLin=DS_STYLES.reduce((a,d)=>a+q[d.priceKey],0);
   // total gutter linear footage (drives flat per-foot pricing). End caps add here (gutter component).
   // Always rounded UP to the nearest whole foot.
+  // New construction bills no end caps or outlets — in flat mode that means their LF allowances too.
+  // Pricing only: materialList() deliberately still lists them, since the crew still loads them.
+  const nc=!!s.newConstruction;
   const gutterFootage = Math.ceil(
     gutterLin
     + corners*(+s.footagePerCorner||0)
-    + outlets*(+s.footagePerOutlet||0)
+    + (nc?0:outlets*(+s.footagePerOutlet||0))
     + q.valley*(+s.footagePerValley||0)
-    + endcapsTot*(+s.footagePerEndcap||0)
+    + (nc?0:endcapsTot*(+s.footagePerEndcap||0))
   );
   // downspout footage. Elbows + offsets add here (downspout components).
   const dsFootage = dsLin
@@ -1562,9 +1602,10 @@ function compute(){
   // so the estimate can show the discount as a percentage of the standard price.
   // Only the gutter/downspout $/ft differ between the two passes; leaf guard, splash blocks,
   // diverters, screens, demo, custom products and Misc/Labor price identically in both.
+  const freeKeys = nc ? new Set([...GUTTER_STYLES.map(g=>g.endKey), ...DS_STYLES.map(d=>d.outletKey)]) : null;
   function priceAt(p,flatGut,flatDs){
     const amt={};
-    for(const k of PRICE_KEYS){ amt[k]=(q[k]||0)*(+p[k]||0); }
+    for(const k of PRICE_KEYS){ amt[k]=(freeKeys&&freeKeys.has(k)) ? 0 : (q[k]||0)*(+p[k]||0); }
     const itemizedSub = Object.values(amt).reduce((a,b)=>a+b,0);
     const leafAmount = q.leaf6*(+p.leaf6||0) + q.leaf5*(+p.leaf5||0);
     const splashAmount = q.splashPlastic*(+p.splashPlastic||0) + q.splashConcrete*(+p.splashConcrete||0);
@@ -1579,10 +1620,15 @@ function compute(){
   }
   const charged = priceAt(s.prices, s.flatGutterRate, s.flatDownspoutRate);
   const list    = priceAt(listPriceMap(), s.flatGutterList, s.flatDownspoutList);
-  const {amt,itemizedSub,leafAmount,splashAmount,turnkey} = charged;
+  const {amt,itemizedSub,leafAmount,splashAmount} = charged;
+  // A price override (small jobs) replaces the turnkey outright. It isn't a discount — the PDF
+  // shows only the new total — so the discount readout is suppressed rather than computed against it.
+  const calcTurnkey = charged.turnkey;
+  const overridden = (+s.priceOverride||0) > 0;
+  const turnkey = overridden ? +s.priceOverride : calcTurnkey;
 
   const listTurnkey = list.turnkey;
-  const discountAmt = Math.max(0, listTurnkey - turnkey);   // an upcharge is not a discount
+  const discountAmt = overridden ? 0 : Math.max(0, listTurnkey - turnkey);   // an upcharge is not a discount
   const hasDiscount = discountAmt>0.005 && listTurnkey>0;
   const discountPct = hasDiscount ? discountAmt/listTurnkey*100 : 0;
 
@@ -1595,7 +1641,7 @@ function compute(){
   return {q,amt,corners,outlets,gutterFootage,dsFootage,itemizedSub,leafAmount,splashAmount,
           customRows,customTotal,customFootage,
           demoFeet,demoAmount,screenRows,screenTotal,
-          turnkey,listTurnkey,discountAmt,discountPct,hasDiscount,
+          turnkey,calcTurnkey,overridden,listTurnkey,discountAmt,discountPct,hasDiscount,
           cardFee,grand,deposit,remaining};
 }
 
@@ -1740,6 +1786,7 @@ function drawScene(){
   const order={hl:0,gutter:1,arrow:2,ds:3,valley:4,splash:4,item:4,stamp:5,text:6};
   const objs=[...P.objects].sort((a,b)=>(order[a.t]||9)-(order[b.t]||9));
   customTagOwner=customTagOwners();   // re-derived here, so the PDF replay groups exactly as the canvas does
+  for(const o of P.objects) if(o.t==="underlay" && o.print) drawUnderlay(o);   // under everything, and it prints
   for(const o of objs) drawObject(o);
 
   // miters where separate runs meet: painted once here, since they belong to no single object.
@@ -1748,7 +1795,7 @@ function drawScene(){
   for(const c of junctionCorners()){
     const sp=worldToScreen(c.pt), k=Math.round(sp.x)+","+Math.round(sp.y);
     const n=(jseen[k]=(jseen[k]||0)+1)-1;
-    if(n){ const a=n*2.0944; sp.x+=Math.cos(a)*9; sp.y+=Math.sin(a)*9; }
+    if(n){ const a=n*2.0944; sp.x+=Math.cos(a)*wpx(9); sp.y+=Math.sin(a)*wpx(9); }
     drawMiterMark(sp, c.bay);
   }
 }
@@ -1765,6 +1812,8 @@ draw = function(){
   ctx.fillRect(0,0,view.w,view.h);
 
   drawGrid();
+  // a plan the rep isn't printing sits under the scene here, outside drawScene() — see drawUnderlay
+  for(const o of P.objects) if(o.t==="underlay" && !o.print) drawUnderlay(o);
   drawScene();
 
   // in-progress drawing
@@ -1806,6 +1855,7 @@ draw = function(){
   // selection overlay
   drawSelection();
   updateSelActionBar();
+  updateLegendOverlay();
 
   // marquee
   if(marquee){
@@ -1826,6 +1876,13 @@ function chipPx(base){
   const s = base*(P.settings.labelSize||1.2)*cam.scale;
   return Math.max(2, Math.min(80, s));
 }
+
+/* Line weights are world-anchored: every width/dash/mark size below is its look at 100% zoom, times
+   cam.scale — so a gutter stays as thick relative to the house at any zoom, and the PDF (diagramSVG
+   sets cam.scale to the print fit) shows the same proportions as the canvas. They used to be fixed
+   screen px, which made runs look heavier the further out you zoomed and on a fitted big job's PDF.
+   Selection chrome, handles and cursors deliberately stay fixed px — they're for the finger. */
+function wpx(v){ return v*cam.scale; }
 
 /* downspout marker (outlet ring + square) scale factor — tracks the measurement-label
    size so the circle/square grow and shrink with zoom exactly like the numbers do */
@@ -1879,6 +1936,7 @@ function chip(text,sx,sy,opt){
    offset (world units), with a thin leader line back to the anchor when moved */
 function labelOffsetOf(o,key){
   if(key==="note") return o.noteOff||null;
+  if(key==="memo") return o.memoOff||null;
   if(key==="size") return o.sizeOff||null;
   if(key==="tag") return o.tagOff||null;
   return (o.segLabelOff && o.segLabelOff[key]) || null;
@@ -1919,20 +1977,15 @@ function drawGutter(o){
   // casing
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="round";
-  ctx.strokeStyle="rgba(20,30,40,.55)";ctx.lineWidth=(w6?9:7);
+  ctx.strokeStyle="rgba(20,30,40,.55)";ctx.lineWidth=wpx(w6?9:7);
   line(pts);
-  ctx.strokeStyle=col;ctx.lineWidth=(w6?6:4.5);
+  ctx.strokeStyle=col;ctx.lineWidth=wpx(w6?6:4.5);
   line(pts);
   if(isSel){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=1.5;ctx.setLineDash([5,4]);line(pts);ctx.setLineDash([]); }
   ctx.restore();
 
-  // end caps — only drawn at free (open) ends
-  const caps=o.caps||[true,true];
-  const fe=freeEnds(o);
-  if(o.pts.length>=2){
-    drawCapMark(pts[0],pts[1], fe[0] && caps[0]!==false);
-    drawCapMark(pts[pts.length-1],pts[pts.length-2], fe[1] && caps[1]!==false);
-  }
+  // No end-cap tick at free ends: reps found it noise on the diagram. Caps are still counted and
+  // billed off freeEnds() in compute()/materialList(), and toggled per end from the Select optbar.
   // corner miter markers
   for(const c of runCorners(o)) drawMiterMark(worldToScreen(c.pt), c.bay);
   // segment length chips
@@ -1955,7 +2008,7 @@ const EXISTING_COL="#8a96a3";
 function drawExistingGutter(o,pts,isSel){
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="butt";
-  ctx.strokeStyle=EXISTING_COL;ctx.lineWidth=4;ctx.setLineDash([10,6]);
+  ctx.strokeStyle=EXISTING_COL;ctx.lineWidth=wpx(4);ctx.setLineDash([wpx(10),wpx(6)]);
   line(pts);ctx.setLineDash([]);
   if(isSel){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=1.5;ctx.setLineDash([5,4]);line(pts);ctx.setLineDash([]); }
   ctx.restore();
@@ -1981,15 +2034,16 @@ function drawExistingGutter(o,pts,isSel){
 function line(pts){ ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke(); }
 // diamond = bay miter, square = regular box/strip miter
 function drawMiterMark(sp,bay){
+  const k=cam.scale;   // sized with the drawing, like the run it sits on (see wpx)
   ctx.save();
   if(bay){
-    ctx.fillStyle=getCSS("--orange");ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
+    ctx.fillStyle=getCSS("--orange");ctx.strokeStyle="#fff";ctx.lineWidth=1.5*k;
     ctx.beginPath();
-    ctx.moveTo(sp.x,sp.y-7);ctx.lineTo(sp.x+7,sp.y);ctx.lineTo(sp.x,sp.y+7);ctx.lineTo(sp.x-7,sp.y);ctx.closePath();
+    ctx.moveTo(sp.x,sp.y-7*k);ctx.lineTo(sp.x+7*k,sp.y);ctx.lineTo(sp.x,sp.y+7*k);ctx.lineTo(sp.x-7*k,sp.y);ctx.closePath();
     ctx.fill();ctx.stroke();
   }else{
-    ctx.fillStyle="#33455a";ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
-    roundRect(ctx,sp.x-6,sp.y-6,12,12,2);ctx.fill();ctx.stroke();
+    ctx.fillStyle="#33455a";ctx.strokeStyle="#fff";ctx.lineWidth=1.5*k;
+    roundRect(ctx,sp.x-6*k,sp.y-6*k,12*k,12*k,2*k);ctx.fill();ctx.stroke();
   }
   ctx.restore();
 }
@@ -2002,13 +2056,6 @@ function drawVertexHandles(o,pts){
   const n = isClosedRun(o) ? pts.length-1 : pts.length;
   for(let i=0;i<n;i++){ const p=pts[i]; ctx.beginPath();ctx.arc(p.x,p.y,6,0,7);ctx.fill();ctx.stroke(); }
   ctx.restore();
-}
-function drawCapMark(end,prev,on){
-  if(!on) return;
-  const dx=end.x-prev.x,dy=end.y-prev.y,L=Math.hypot(dx,dy)||1;
-  const nx=-dy/L,ny=dx/L; const r=6;
-  ctx.save();ctx.strokeStyle="#1b2530";ctx.lineWidth=2.5;
-  ctx.beginPath();ctx.moveTo(end.x+nx*r,end.y+ny*r);ctx.lineTo(end.x-nx*r,end.y-ny*r);ctx.stroke();ctx.restore();
 }
 
 function drawCustom(o){
@@ -2024,8 +2071,8 @@ function drawCustom(o){
   const col=o.color||(prod&&prod.color)||"#7a4fd6";
   ctx.save();
   ctx.lineJoin="round";ctx.lineCap="round";
-  ctx.strokeStyle="rgba(20,30,40,.45)";ctx.lineWidth=7;line(pts);
-  ctx.strokeStyle=col;ctx.lineWidth=4.5;ctx.setLineDash([9,5]);line(pts);ctx.setLineDash([]);
+  ctx.strokeStyle="rgba(20,30,40,.45)";ctx.lineWidth=wpx(7);line(pts);
+  ctx.strokeStyle=col;ctx.lineWidth=wpx(4.5);ctx.setLineDash([wpx(9),wpx(5)]);line(pts);ctx.setLineDash([]);
   if(isSel){ ctx.strokeStyle="#2b7fd0";ctx.lineWidth=1.5;ctx.setLineDash([5,4]);line(pts);ctx.setLineDash([]); }
   ctx.restore();
   // product tag — once per connected group, above its top-most vertex, not once per run.
@@ -2069,6 +2116,14 @@ function drawDS(o){
   const _dsz=chipPx(11);
   const box=segChip(o,"note",s.x,s.y+20*k,label,{size:_dsz,pad:Math.max(2,_dsz*0.42),bold:true,bg:"#fff",fg:"#1b2530",bc:"#7c8896"});
   addLabelBox("dsnote",o.id,box.x,box.y,box.w,box.h);
+  // the rep's free-text note ("next to brick"), kept apart from the notation so parseDS never
+  // has to skip words. Drawn in drawScene, so it prints; own offset so it can be dragged clear.
+  const memo=String(o.memo||"").trim();
+  if(memo){
+    const _msz=chipPx(9.5);
+    const mbox=segChip(o,"memo",s.x,s.y+36*k,memo,{size:_msz,pad:Math.max(2,_msz*0.42),bg:"#fffbe6",fg:"#1b2530",bc:"#c9a227",font:"Arial"});
+    addLabelBox("dsmemo",o.id,mbox.x,mbox.y,mbox.w,mbox.h);
+  }
   addLabelBox("obj",o.id,s.x-9*k,s.y-9*k,18*k,18*k);
   // size tag — draggable like the notation chip, so it can be moved off a crowded
   // corner of the diagram. Registered last so it wins the hit test over the marker.
@@ -2213,6 +2268,13 @@ function drawTextHandles(rect){
     ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();
     ctx.restore();
   });
+  // corner squares scale the whole box — text size and width together (see textResize)
+  [[rect.x,rect.y],[rect.x+rect.w,rect.y],[rect.x,rect.y+rect.h],[rect.x+rect.w,rect.y+rect.h]].forEach(([cx,cy])=>{
+    ctx.save();
+    ctx.fillStyle="#fff";ctx.strokeStyle="#2b7fd0";ctx.lineWidth=2;
+    ctx.fillRect(cx-5,cy-5,10,10);ctx.strokeRect(cx-5,cy-5,10,10);
+    ctx.restore();
+  });
 }
 function drawText(o){
   const s=worldToScreen(o);
@@ -2225,7 +2287,7 @@ function drawText(o){
     roundRect(ctx,rect.x,rect.y,rect.w,rect.h,6);
     ctx.setLineDash([4,3]);ctx.lineWidth=1.5;ctx.strokeStyle="#2b7fd0";ctx.stroke();
     ctx.restore();
-    drawTextHandles(rect);   // left/right width handles only — see textHandleHit
+    drawTextHandles(rect);   // side handles = width, corner handles = scale — see textHandleHit
   }
   addLabelBox("text",o.id,rect.x,rect.y,rect.w,rect.h);
 }
@@ -2234,9 +2296,9 @@ function drawArrow(o){
   const a=worldToScreen({x:o.x1,y:o.y1}), b=worldToScreen({x:o.x2,y:o.y2});
   ctx.save();
   ctx.strokeStyle=o.color||"#c8202a";ctx.fillStyle=o.color||"#c8202a";
-  ctx.lineWidth=(o.width||3)*Math.max(.6,cam.scale*0.8);ctx.lineCap="round";
+  ctx.lineWidth=wpx((o.width||3)*0.8);ctx.lineCap="round";
   ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
-  const ang=Math.atan2(b.y-a.y,b.x-a.x);const hs=9+(o.width||3);
+  const ang=Math.atan2(b.y-a.y,b.x-a.x);const hs=wpx(9+(o.width||3));
   ctx.beginPath();ctx.moveTo(b.x,b.y);
   ctx.lineTo(b.x-hs*Math.cos(ang-.4),b.y-hs*Math.sin(ang-.4));
   ctx.lineTo(b.x-hs*Math.cos(ang+.4),b.y-hs*Math.sin(ang+.4));
@@ -2277,7 +2339,7 @@ function paintStroke(o, fallback, mode, tag){
   const pts=o.pts.map(worldToScreen);
   ctx.save();
   ctx.globalAlpha=.38;ctx.strokeStyle=o.color||fallback;
-  ctx.lineWidth=(o.width||18)*Math.max(.5,cam.scale);ctx.lineCap="round";ctx.lineJoin="round";
+  ctx.lineWidth=wpx(o.width||18);ctx.lineCap="round";ctx.lineJoin="round";
   ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);
   if(pts.length===1)ctx.lineTo(pts[0].x+.1,pts[0].y);
   ctx.stroke();
@@ -2300,7 +2362,7 @@ function paintStroke(o, fallback, mode, tag){
     // selection traces the stroke's shape (not a bounding rectangle)
     ctx.save();
     ctx.strokeStyle="#2b7fd0";ctx.setLineDash([6,4]);ctx.lineCap="round";ctx.lineJoin="round";
-    ctx.lineWidth=(o.width||18)*Math.max(.5,cam.scale)+3;
+    ctx.lineWidth=wpx(o.width||18)+3;
     ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);
     if(pts.length===1)ctx.lineTo(pts[0].x+.1,pts[0].y);
     ctx.stroke();ctx.restore();
@@ -2309,6 +2371,105 @@ function paintStroke(o, fallback, mode, tag){
 function drawHL(o){ paintStroke(o, getCSS("--hl"), null); }
 function drawDemo(o){ paintStroke(o, "#ff3b30", "demo", "DEMO"); }
 function drawScreen(o){ const t=screenTypeDef(o.screenType); paintStroke(o, "#34c759", "screen", t.name); }
+
+/* ---- symbol legend ----
+   Lists only what's on THIS option's drawing, so a simple job gets a two-line key. Built as HTML
+   with inline-SVG swatches and shown two ways from the same markup: an overlay on the stage
+   (#diagLegend — not on the canvas, so it never moves with pan/zoom and never prints twice) and a
+   corner overlay inside the PDF's .dg box. The swatch shapes copy drawMiterMark / drawDS / chip. */
+function legendItems(){
+  const s=P.settings, out=[], seen=new Set();
+  const add=(key,it)=>{ if(!seen.has(key)){ seen.add(key); out.push(it); } };
+  let reg=false, bay=false;
+  for(const o of P.objects){
+    if(o.t==="gutter"){
+      if(o.existing){ add("existing",{k:"existing",label:"Existing (stays)"}); continue; }
+      add("gutter",{k:"gutter",label:"Gutter",color:colorHex(s.gutterColor,gutterBrand())});
+      for(const c of runCorners(o)){ if(c.bay) bay=true; else reg=true; }
+    } else if(o.t==="ds"){
+      if(o.existing){ add("existing",{k:"existing",label:"Existing (stays)"}); continue; }
+      add("ds",{k:"ds",label:"Downspout",color:colorHex(s.downspoutColor,downspoutBrand())});
+      if(String(o.notation||"").trim()) add("dsnote",{k:"chip",text:"AB 20",label:"A/B elbows · ft of pipe"});
+    } else if(o.t==="valley") add("valley",{k:"chip",text:"VS",bg:"#ff8a00",fg:"#fff",label:"Valley shield"});
+    else if(o.t==="splash") add("splash",{k:"chip",text:"SB",bg:"#2f6fd0",fg:"#fff",label:"Splash block"});
+    else if(o.t==="demo") add("demo",{k:"band",color:"#ff3b30",label:"Demo (remove)"});
+    else if(o.t==="screen") add("screen",{k:"band",color:"#34c759",label:"Gutter screen"});
+    else if(o.t==="custom"||o.t==="item"){
+      const prod=productOf(o.productId); if(!prod) continue;
+      const col=prod.color||"#7a4fd6";
+      if(o.t==="item") add("p"+prod.id,{k:"chip",text:productTag(prod),bg:col,fg:"#fff",label:prod.name});
+      else if(o.stroke||strokeMode(prod)) add("p"+prod.id,{k:"band",color:col,label:prod.name});
+      else add("p"+prod.id,{k:"dash",color:col,label:prod.name});
+    }
+  }
+  for(const c of junctionCorners()){ if(c.bay) bay=true; else reg=true; }
+  if(reg) out.push({k:"miter",label:"Corner miter"});
+  if(bay) out.push({k:"bay",label:"Bay miter"});
+  return out;
+}
+function legendSwatchSVG(it){
+  const box=(inner)=>`<svg width="24" height="14" viewBox="0 0 24 14" style="flex:0 0 auto;display:block">${inner}</svg>`;
+  const e=v=>esc(v);
+  switch(it.k){
+    case "gutter":   return box(`<line x1="2" y1="7" x2="22" y2="7" stroke="rgba(20,30,40,.55)" stroke-width="7" stroke-linecap="round"/><line x1="2" y1="7" x2="22" y2="7" stroke="${e(it.color)}" stroke-width="4.5" stroke-linecap="round"/>`);
+    case "existing": return box(`<line x1="1" y1="7" x2="23" y2="7" stroke="${EXISTING_COL}" stroke-width="4" stroke-dasharray="6 3"/>`);
+    case "dash":     return box(`<line x1="2" y1="7" x2="22" y2="7" stroke="rgba(20,30,40,.45)" stroke-width="6" stroke-linecap="round"/><line x1="2" y1="7" x2="22" y2="7" stroke="${e(it.color)}" stroke-width="4" stroke-dasharray="6 3"/>`);
+    case "band":     return box(`<line x1="3" y1="7" x2="21" y2="7" stroke="${e(it.color)}" stroke-opacity=".38" stroke-width="10" stroke-linecap="round"/>`);
+    case "ds":       return box(`<circle cx="12" cy="7" r="6" fill="#fff" stroke="#1b2530" stroke-width="1.8"/><rect x="8" y="3" width="8" height="8" rx="1.8" fill="${e(it.color)}" stroke="#1b2530" stroke-width="1.1"/>`);
+    case "miter":    return box(`<rect x="7" y="2" width="10" height="10" rx="2" fill="#33455a" stroke="#fff" stroke-width="1.3"/>`);
+    case "bay":      return box(`<path d="M12 1 L18 7 L12 13 L6 7 Z" fill="#ff8a00" stroke="#fff" stroke-width="1.3"/>`);
+    case "chip": {
+      const bg=it.bg||"#fff", fg=it.fg||"#1b2530";
+      return `<span style="flex:0 0 auto;display:inline-block;min-width:24px;box-sizing:border-box;text-align:center;font:700 8px/1 Arial,sans-serif;padding:2px 3px;border-radius:3px;background:${e(bg)};color:${e(fg)};border:1px solid ${bg==="#fff"?"#7c8896":e(bg)};white-space:nowrap">${e(it.text)}</span>`;
+    }
+  }
+  return "";
+}
+function legendHTML(items){
+  if(!items.length) return "";
+  return `<div class="lgd-title" style="font:800 8px/1.2 Arial,sans-serif;letter-spacing:.6px;text-transform:uppercase;color:#5b6b7a;margin-bottom:3px">Legend</div>`
+    + items.map(it=>`<div style="display:flex;align-items:center;gap:5px;margin:2px 0">${legendSwatchSVG(it)}<span style="font:600 9px/1.2 Arial,sans-serif;color:#1b2530;white-space:nowrap">${esc(it.label)}</span></div>`).join("");
+}
+/* Where page 1's legend sits in the PDF diagram box, per option (P.pres.legend): x/y are 0..1
+   across the box's FREE space — 0 is flush left/top, 1 flush right/bottom — and s is a scale.
+   Placing by fraction of free space (anchor point = the same fraction of the legend itself) means
+   the legend can never be pushed out of the box, whatever height pdfBoxFor gives that page, and
+   scaling about that anchor keeps it pinned to the edge it was dragged to. */
+const LEGEND_DEFAULT={x:0,y:1,s:1};
+function ensureLegendPlace(L){
+  if(!L||typeof L!=="object") return null;
+  const c=(v,a,b,d)=>isFinite(+v)?Math.min(b,Math.max(a,+v)):d;
+  return {x:c(L.x,0,1,0), y:c(L.y,0,1,1), s:c(L.s,0.6,3,1)};
+}
+function legendPlaceStyle(L){
+  L=L||LEGEND_DEFAULT;
+  const px=r1(L.x*100), py=r1(L.y*100);
+  return `left:${px}%;top:${py}%;transform:translate(-${px}%,-${py}%) scale(${+L.s.toFixed(3)});transform-origin:${px}% ${py}%`;
+}
+let legendSig="", legendCollapsed=false;
+// One switch for the canvas key and the PDF's, written to every option like the ⚙ Settings
+// checkbox it mirrors — the ✕ on the canvas key and PDF View's ◳ Legend both land here.
+function setLegendShown(on){
+  recordHistory();
+  OPTIONS.forEach(o=>{ if(o.settings) o.settings.showLegend=!!on; }); P.settings.showLegend=!!on;
+  legendSig=""; refreshAll(); saveLocal();
+  setHint(on ? "Legend shown on the diagram and PDF." : "Legend hidden — bring it back from PDF View → ◳ Legend or ⚙ Settings.");
+}
+function updateLegendOverlay(){
+  let el=document.getElementById("diagLegend");
+  if(!el || !el.style) return;
+  // no page check needed: #photoStage / #pdfStage (z-index 30) cover it off the Diagram page
+  const on = P.settings.showLegend!==false;
+  const items = on ? legendItems() : [];
+  const sig = (on?"1":"0")+(legendCollapsed?"c":"")+JSON.stringify(items);
+  if(sig===legendSig) return;
+  legendSig=sig;
+  el.style.display = items.length ? "block" : "none";
+  const x=`<button data-lghide title="Hide the legend (diagram and PDF)" style="position:absolute;top:3px;right:3px;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:#eef2f6;color:#5b6b7a;font:700 11px/20px Arial,sans-serif;cursor:pointer">✕</button>`;
+  el.innerHTML = (legendCollapsed
+    ? `<div class="lgd-title" style="font:800 9px/1.2 Arial,sans-serif;letter-spacing:.6px;text-transform:uppercase;color:#5b6b7a;padding-right:22px">Legend ▸</div>`
+    : `<div style="padding-right:18px">${legendHTML(items)}</div>`) + x;
+}
 
 /* ---- vector diagram for the PDF ----
    The PDF used to embed canvas.toDataURL(): a screen-resolution PNG that went unreadable once
@@ -2372,6 +2533,12 @@ function makeSvgCtx(){
     stroke(){ if(d) out.push(`<path d="${d}"${strokeAttr()}/>`); },
     fillRect(x,y,w,h){ ext(x,y); ext(x+w,y+h); out.push(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${fillAttr()}/>`); },
     strokeRect(x,y,w,h){ ext(x,y,st.lineWidth); ext(x+w,y+h,st.lineWidth); out.push(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${strokeAttr()}/>`); },
+    // the plan underlay, when it's set to print: embedded as the same data URL the canvas drew
+    drawImage(im,x,y,w,h){
+      const src=im&&im.src; if(!src) return;
+      ext(x,y); ext(x+w,y+h);
+      out.push(`<image href="${xa(src)}" x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}" preserveAspectRatio="none"${alpha()}/>`);
+    },
     measureText(t){ meas.font=st.font; return meas.measureText(t); },
     fillText(t,x,y){
       // font is "[italic ][weight ]<size>px <family>" in this file — an optional style
@@ -2452,9 +2619,9 @@ function drawInProgress(){
   if(drawing.t==="gutter"){
     const pts=drawing.pts.map(worldToScreen);
     if(cursorW){ pts.push(worldToScreen(cursorW)); }
-    ctx.strokeStyle="rgba(20,30,40,.4)";ctx.lineWidth=8;ctx.lineJoin="round";ctx.lineCap="round";
+    ctx.strokeStyle="rgba(20,30,40,.4)";ctx.lineWidth=wpx(8);ctx.lineJoin="round";ctx.lineCap="round";
     if(pts.length>1) line(pts);
-    ctx.strokeStyle=colorHex(P.settings.gutterColor,gutterBrand());ctx.lineWidth=5;
+    ctx.strokeStyle=colorHex(P.settings.gutterColor,gutterBrand());ctx.lineWidth=wpx(5);
     if(pts.length>1) line(pts);
     for(const p of drawing.pts.map(worldToScreen)){ ctx.fillStyle="#fff";ctx.strokeStyle="#1b2530";ctx.lineWidth=1.5;
       ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill();ctx.stroke(); }
@@ -2476,7 +2643,7 @@ function drawInProgress(){
     const col=(prod&&prod.color)||"#7a4fd6";
     const pts=drawing.pts.map(worldToScreen);
     if(cursorW){ pts.push(worldToScreen(cursorW)); }
-    ctx.strokeStyle=col;ctx.lineWidth=5;ctx.lineJoin="round";ctx.lineCap="round";ctx.setLineDash([9,5]);
+    ctx.strokeStyle=col;ctx.lineWidth=wpx(5);ctx.lineJoin="round";ctx.lineCap="round";ctx.setLineDash([wpx(9),wpx(5)]);
     if(pts.length>1) line(pts); ctx.setLineDash([]);
     for(const p of drawing.pts.map(worldToScreen)){ ctx.fillStyle="#fff";ctx.strokeStyle="#1b2530";ctx.lineWidth=1.5;
       ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill();ctx.stroke(); }
@@ -2488,10 +2655,10 @@ function drawInProgress(){
     }
   } else if(drawing.t==="arrow"&&cursorW){
     const a=worldToScreen(drawing.start),b=worldToScreen(cursorW);
-    ctx.strokeStyle="#c8202a";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+    ctx.strokeStyle="#c8202a";ctx.lineWidth=wpx(2.4);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
   } else if(drawing.t==="hl"){
     const pts=drawing.pts.map(worldToScreen);
-    ctx.globalAlpha=.42;ctx.strokeStyle=hlColor;ctx.lineWidth=(hlWidth)*Math.max(.5,cam.scale);ctx.lineCap="round";ctx.lineJoin="round";
+    ctx.globalAlpha=.42;ctx.strokeStyle=hlColor;ctx.lineWidth=wpx(hlWidth);ctx.lineCap="round";ctx.lineJoin="round";
     if(pts.length){ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke();}
   } else if(drawing.t==="demo"){
     ctx.restore(); paintStroke({pts:drawing.pts,color:demoColor,width:demoWidth},"#ff3b30","demo","DEMO"); ctx.save();
@@ -2537,6 +2704,8 @@ function drawSelection(){
 
 /* object bounds in WORLD coords {x,y,w,h} */
 function objBounds(o){
+  // an unprinted plan must not stretch the PDF's auto-fit around an empty page of blueprint
+  if(o.t==="underlay") return o.print ? {x:o.x,y:o.y,w:o.w,h:o.h} : null;
   if(o.t==="gutter"||o.t==="hl"||o.t==="custom"||o.t==="demo"||o.t==="screen"){
     const xs=o.pts.map(p=>p.x),ys=o.pts.map(p=>p.y);
     const x=Math.min(...xs),y=Math.min(...ys);
@@ -2733,7 +2902,7 @@ function pdfBoxFor(page,{meta,settings,r,nPages,first,multi}){
   if(page>0) return {w:PDF_PAGE.w, h:PDF_BUDGET_H-PDFL.mini-(PDFL.gap+PDFL.strip)-PDFL.gap};
   // The customer card, row by row: each grid row is as tall as its tallest cell, and a row whose
   // three cells are all blank isn't emitted at all — same rule buildEstimateHTML applies.
-  const rep=[meta.salesperson,fmtPhone(meta.salespersonPhone)].map(v=>String(v||"").trim()).filter(Boolean).join("  ·  ");
+  const rep=repLine(meta);
   const cust=Math.max(custCellH(meta.name,1), custCellH(meta.address),
                       custCellH(fmtPhone(meta.phone))+custCellH(fmtPhone(meta.cell)))   // phone + cell share a slot
            + Math.max(custCellH(meta.email), custCellH(meta.gateCode), custCellH(rep));
@@ -2993,6 +3162,7 @@ function buildOptbar(){
       + dv + g('<label><input type="checkbox" id="opAuto" '+(P.settings.autoMeasure?"checked":"")+'> Auto-measure</label>')
       + g('<label>ft / square</label><input id="opFps" type="number" min="0.5" step="0.5" value="'+(P.settings.feetPerSquare)+'" style="width:60px">')
       + g('<button class="chip" id="opCalib">Calibrate…</button>')
+      + g('<button class="chip" id="opPlan">📄 '+(planOf()?'Plan…':'Draw on a plan…')+'</button>')
       + dv + g('<label><input type="checkbox" id="opSnap" '+(snap?"checked":"")+'> Snap to grid</label>')
       + g('<label><input type="checkbox" id="opAngleSnap" '+(angleSnap?"checked":"")+'> 22.5° angles</label>');
   } else if(tool==="ds"){
@@ -3037,7 +3207,7 @@ function buildOptbar(){
     const selOne = sel.size===1?objById([...sel][0]):null;
     const ts = (selOne&&selOne.t==="text") ? selOne
       : {font:textFont,size:textSize,color:textColor,fill:textFill,bold:textBold,italic:textItalic,border:textBorder};
-    h+='<span class="ob-title">TEXT</span>'+dv+textStyleStripHTML(ts);
+    h+='<span class="ob-title">TEXT</span>'+dv+textStyleStripHTML(ts)+dv+g('<button class="chip" id="opQuiz">Job details quiz…</button>');
   } else if(tool==="arrow"){
     h+='<span class="ob-title">ARROW</span>'+dv
       + g('<label>Color</label><input type="color" id="opArrColor" value="#c8202a" style="width:40px;height:28px;border:0;background:none">')
@@ -3157,6 +3327,8 @@ function wireOptbar(){
   if(byId("opAuto")) byId("opAuto").onchange=e=>{ P.settings.autoMeasure=e.target.checked; setHint(e.target.checked?("Auto-measure on — each grid square = "+P.settings.feetPerSquare+" ft. Lengths fill in as you draw."):toolHint(tool)); };
   if(byId("opFps")) byId("opFps").onchange=e=>{ P.settings.feetPerSquare=Math.max(0.5,+e.target.value||1); refreshAll(); };
   if(byId("opCalib")) byId("opCalib").onclick=startCalibration;
+  if(byId("opQuiz")) byId("opQuiz").onclick=openJobQuiz;
+  if(byId("opPlan")) byId("opPlan").onclick=openPlanModal;
   if(byId("opCustEdit")) byId("opCustEdit").onclick=()=>openCustomProduct(activeCustom);
   if(byId("opCustCol")) byId("opCustCol").onclick=()=>{ const p=productOf(activeCustom); if(p) pickColor("Color for "+p.name,p.color,c=>{ p.color=c; if(byId("opCustSw"))byId("opCustSw").style.background=c; refreshAll(); }); };
   if(byId("opDsSize")) byId("opDsSize").onchange=e=>{ dsDrawSize=e.target.value; };
@@ -3335,6 +3507,7 @@ function addOption(mode){   // mode: "dup" (copy active drawing+pricing) | "blan
   byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
   seedHistory();
   buildDock(); buildOptbar(); buildOptionsBar(); centerView(); refreshAll(); saveLocal();
+  renameOption(activeOpt);   // name it now, while the rep knows what the variant is for
 }
 function deleteOption(i){
   if(OPTIONS.length<=1||!OPTIONS[i]) return;
@@ -3348,10 +3521,19 @@ function deleteOption(i){
   else if(i<activeOpt) activeOpt--;
   activate(activeOpt); saveLocal();
 }
+/* An in-app modal, not prompt(): reps name options ("Seamless 6in", "Repair only") and the tab
+   was only renameable by dblclick, which an iPad tap doesn't reliably fire. Callers run this
+   inside the tap's own handler — iOS only raises the keyboard for a focus() made there. */
 function renameOption(i){
   const o=OPTIONS[i]; if(!o) return;
-  const n=prompt("Option name:", o.name);
-  if(n!=null && n.trim()){ o.name=n.trim(); buildOptionsBar(); saveLocal(); }
+  openModal("Name this option",`<div class="fld"><label>Option name</label><input id="optNameIn" type="text" maxlength="40" value="${esc(o.name)}" placeholder="e.g. 6&quot; seamless, Repair only"></div>
+    <div class="note">The name shows on the tab and heads this option's pages in the PDF.</div>
+    <div style="margin-top:8px"><button class="btn-sm" id="optNameSave" style="background:var(--prime);color:#fff;border-color:var(--prime)">Save</button></div>`);
+  const inp=byId("optNameIn");
+  const save=()=>{ const n=(inp.value||"").trim(); if(n){ o.name=n; buildOptionsBar(); saveLocal(); if(curPage==="pdf") buildPdfOpts(); } closeModal(); };
+  byId("optNameSave").onclick=save;
+  inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); save(); } };
+  inp.focus(); if(inp.select) inp.select();
 }
 // turnkey total of an arbitrary option (used for the tab labels) without disturbing the live state
 function optionTotal(opt){
@@ -3372,14 +3554,19 @@ function buildOptionsBar(){
   let h="";
   OPTIONS.forEach((o,i)=>{
     const x = OPTIONS.length>1 ? `<span class="opt-x" data-del="${i}" title="Delete option">✕</span>` : "";
-    h+=`<button class="opt-tab ${i===activeOpt?"active":""}" data-opt="${i}"><span>${esc(o.name)}</span><span class="opt-tot">${money(optionTotal(o))}</span>${x}</button>`;
+    // the active tab carries a pencil: tapping it again renames (see the onclick below)
+    const pen = i===activeOpt ? `<span class="opt-ren" title="Rename option">✎</span>` : "";
+    h+=`<button class="opt-tab ${i===activeOpt?"active":""}" data-opt="${i}"><span>${esc(o.name)}</span>${pen}<span class="opt-tot">${money(optionTotal(o))}</span>${x}</button>`;
   });
   h+=`<button class="opt-add" id="optDup" title="Copy this option's drawing & pricing into a new tab">⧉ Duplicate</button>`;
   h+=`<button class="opt-add" id="optBlank" title="New option — same pricing, empty drawing">＋ Blank</button>`;
   bar.innerHTML=h;
   bar.querySelectorAll(".opt-tab").forEach(btn=>{
-    btn.onclick=(e)=>{ if(e.target.closest(".opt-x")) return; switchOption(+btn.dataset.opt); };
-    btn.ondblclick=()=>renameOption(+btn.dataset.opt);
+    btn.onclick=(e)=>{
+      if(e.target.closest(".opt-x")) return;
+      const i=+btn.dataset.opt;
+      if(i===activeOpt) renameOption(i); else switchOption(i);
+    };
   });
   bar.querySelectorAll(".opt-x").forEach(x=>{ x.onclick=(e)=>{ e.stopPropagation(); deleteOption(+x.dataset.del); }; });
   const dup=byId("optDup"); if(dup) dup.onclick=()=>addOption("dup");
@@ -3392,7 +3579,7 @@ function buildOptionsBar(){
 // "text" is deliberately absent: a text box's first tap now selects (matching PDF Expert
 // and making restyling possible), and a second tap on an already-selected box edits it.
 // seglen/dsnote/stamp stay single-tap — see the tap dispatch in onUp.
-const EDITABLE=new Set(["seglen","dsnote","stamp"]);
+const EDITABLE=new Set(["seglen","dsnote","dsmemo","stamp"]);
 function hitTest(pt){
   // 1) editable / object label boxes (topmost last drawn -> iterate reverse)
   for(let i=labelBoxes.length-1;i>=0;i--){
@@ -3420,6 +3607,9 @@ function hitTest(pt){
       for(let i=0;i<ps.length-1;i++){ if(ptSegDist(pt,ps[i],ps[i+1])<(o.width||18)*cam.scale/2+TOL/2) return {objId:o.id,kind:o.t+"line"}; }
     }
   }
+  // an UNLOCKED plan underlay, last: anything drawn over it still wins the tap
+  const ul=P.objects.find(o=>o.t==="underlay"&&!o.locked);
+  if(ul){ const w=screenToWorld(pt); if(w.x>=ul.x&&w.x<=ul.x+ul.w&&w.y>=ul.y&&w.y<=ul.y+ul.h) return {objId:ul.id,kind:"underlay"}; }
   return null;
 }
 /* arrow endpoint handle hit when single-selected */
@@ -3461,13 +3651,19 @@ function moveWeldedVertices(run, oldP, newP){
     }
   }
 }
-/* text width handles — left/right only, at the vertical mid of the last-drawn box
-   (drawTextHandles). Height is never a handle; it always follows the content. */
+/* text box handles on the last-drawn box (drawTextHandles). Left/right set the width and the text
+   re-wraps; the four corners scale the box — size and width together — so a block like the job
+   details card can be made bigger or smaller as a whole. Height is never set directly; it always
+   follows the content. Corners are tested first: they sit nearer the grab than the side handles. */
 function textHandleHit(pt){
   if(sel.size!==1) return null;
   const o=objById([...sel][0]); if(!o||o.t!=="text") return null;
   const lb=findLabel("text",o.id); if(!lb) return null;
   const tol = lastPtrType==="touch" ? 26 : 16;   // bigger grab area = easier to resize
+  const ctol = lastPtrType==="touch" ? 20 : 10;
+  for(const [cx,cy,corner] of [[lb.x,lb.y,"tl"],[lb.x+lb.w,lb.y,"tr"],[lb.x,lb.y+lb.h,"bl"],[lb.x+lb.w,lb.y+lb.h,"br"]]){
+    if(Math.hypot(pt.x-cx,pt.y-cy)<ctol) return {o,corner,lb};
+  }
   const midY=lb.y+lb.h/2;
   if(Math.hypot(pt.x-lb.x,pt.y-midY)<tol) return {o,side:"left",lb};
   if(Math.hypot(pt.x-(lb.x+lb.w),pt.y-midY)<tol) return {o,side:"right",lb};
@@ -3486,7 +3682,7 @@ function translateInto(o,clone,dx,dy){
 /* ============================================================ */
 /* POINTER EVENTS                                               */
 /* ============================================================ */
-let press=null, panning=null, spaceDown=false, arrowDrag=null, textResize=null, vertexDrag=null;
+let press=null, panning=null, spaceDown=false, arrowDrag=null, textResize=null, vertexDrag=null, underlayResize=null;
 let lastPtrType="mouse";   // updated on pointerdown; widens hit tolerance for touch
 let calib=null;   // {a, b} during scale calibration
 let lastClickT=0, lastClickPt=null;
@@ -3508,7 +3704,7 @@ function gestDist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y)||1; }
 // abort any single-finger interaction when a 2nd finger lands (make way for pan/zoom)
 function abortSingleTouch(){
   drawing=null; gutterExtend=null;
-  press=null; arrowDrag=null; textResize=null; vertexDrag=null; marquee=null; pendingTap=null;
+  press=null; arrowDrag=null; textResize=null; vertexDrag=null; underlayResize=null; marquee=null; pendingTap=null;
   panning=null;
   // a pinch mid frame-drag puts the frame back rather than leaving an unrecorded half-move
   if(frameDrag){ const f=(P.pres.pages||[])[frameDrag.i]; if(f) Object.assign(f,frameDrag.orig); frameDrag=null; }
@@ -3593,7 +3789,16 @@ function onDown(e){
     // priority: arrow/text handles, then vertex handles of an already-selected run,
     // then any line/object body (drag = move whole run), then empty space = marquee.
     const ah=arrowHandleHit(pt); if(ah){ arrowDrag={o:ah.o,end:ah.end}; return; }
+    const uh=underlayHandleHit(pt); if(uh){ underlayResize={o:uh,aspect:uh.h/Math.max(1e-6,uh.w)}; return; }
     const th=textHandleHit(pt);
+    if(th && th.corner){
+      // anchor the opposite corner; scale = how far the grabbed corner moved along the diagonal
+      const o=th.o, w0=th.lb.w/cam.scale, h0=th.lb.h/cam.scale;
+      const left=th.corner[1]==="l", top=th.corner[0]==="t";
+      const A={x:left?o.x+w0:o.x, y:top?o.y+h0:o.y}, C0={x:left?o.x:o.x+w0, y:top?o.y:o.y+h0};
+      textResize={o,corner:th.corner,A,C0,w0,h0,size0:+o.size||14,fixedW:o.w==null?null:o.w,left,top};
+      return;
+    }
     if(th){
       textResize={o:th.o,side:th.side,w0:(th.o.w==null?th.lb.w/cam.scale:th.o.w),x0:th.o.x,startW:screenToWorld(pt)};
       return;
@@ -3601,12 +3806,13 @@ function onDown(e){
     const gv=gutterVertexHit(pt); if(gv){ vertexDrag={o:gv.o,idx:gv.idx,oldPos:{x:gv.o.pts[gv.idx].x,y:gv.o.pts[gv.idx].y}}; return; }
     const hit=hitTest(pt);
     if(hit){
-      if(hit.kind==="seglen"||hit.kind==="dsnote"||hit.kind==="strokelabel"||hit.kind==="dssize"||hit.kind==="customtag"){
+      if(hit.kind==="seglen"||hit.kind==="dsnote"||hit.kind==="dsmemo"||hit.kind==="strokelabel"||hit.kind==="dssize"||hit.kind==="customtag"){
         // grab a measurement number / note / demo+screen footage label / custom product tag:
         // dragging moves just that label (offset stored on its parent object); a tap on a
         // seglen/note opens its editor.
         const o=objById(hit.objId);
         const cur = hit.kind==="dsnote" ? (o&&o.noteOff)
+                  : hit.kind==="dsmemo" ? (o&&o.memoOff)
                   : hit.kind==="dssize" ? (o&&o.sizeOff)
                   : hit.kind==="strokelabel" ? (o&&o.labelOff)
                   : hit.kind==="customtag" ? (o&&o.tagOff)
@@ -3745,6 +3951,7 @@ function onMove(e){
   }
 
   if(arrowDrag){ const o=arrowDrag.o; if(arrowDrag.end===0){o.x1=w.x;o.y1=w.y;}else{o.x2=w.x;o.y2=w.y;} draw(); return; }
+  if(underlayResize){ const o=underlayResize.o; o.w=Math.max(GRID*2,w.x-o.x); o.h=o.w*underlayResize.aspect; draw(); return; }
   if(vertexDrag){
     const o=vertexDrag.o, idx=vertexDrag.idx;
     const L=o.pts.length-1, closed=isClosedRun(o);
@@ -3769,6 +3976,19 @@ function onMove(e){
         o.lengths[L-1]=autoLen(o.pts[L-1],o.pts[L]);
       }
     }
+    draw(); return;
+  }
+  if(textResize && textResize.corner){
+    const T=textResize, o=T.o;
+    const vx=T.C0.x-T.A.x, vy=T.C0.y-T.A.y, d2=(vx*vx+vy*vy)||1;
+    const k=Math.max(0.05,((w.x-T.A.x)*vx+(w.y-T.A.y)*vy)/d2);
+    const ns=Math.max(6,Math.min(200,Math.round(T.size0*k)));
+    const kk=ns/T.size0;                    // the scale the size actually snapped to
+    o.size=ns;
+    if(T.fixedW!=null) o.w=Math.max(60,T.fixedW*kk);
+    const nw=(T.fixedW!=null?o.w:T.w0*kk), nh=T.h0*kk;
+    o.x = T.left ? T.A.x-nw : T.A.x;
+    o.y = T.top  ? T.A.y-nh : T.A.y;
     draw(); return;
   }
   if(textResize){
@@ -3799,6 +4019,7 @@ function onMove(e){
       if(o){
         const nx=press.startOff.x+wdx, ny=press.startOff.y+wdy;
         if(press.hit.kind==="dsnote"){ o.noteOff={x:nx,y:ny}; }
+        else if(press.hit.kind==="dsmemo"){ o.memoOff={x:nx,y:ny}; }
         else if(press.hit.kind==="dssize"){ o.sizeOff={x:nx,y:ny}; }
         else if(press.hit.kind==="strokelabel"){ o.labelOff={x:nx,y:ny}; }
         else if(press.hit.kind==="customtag"){ o.tagOff={x:nx,y:ny}; }
@@ -3837,8 +4058,9 @@ function onUp(e){
   if(frameDrag){ frameDrag=null; recordHistory(); scheduleSave(); return; }
   if(erasing){ erasing=null; refreshAll(); return; }
   if(arrowDrag){ arrowDrag=null; recordHistory(); return; }
+  if(underlayResize){ underlayResize=null; recordHistory(); saveLocal(); return; }
   if(vertexDrag){ vertexDrag=null; recordHistory(); refreshAll(); return; }
-  if(textResize){ textResize=null; recordHistory(); return; }
+  if(textResize){ const wasCorner=!!textResize.corner; textResize=null; recordHistory(); if(wasCorner) buildOptbar(); return; }
 
   if(press){
     if(press.mode==="maybeMove"){
@@ -3973,6 +4195,7 @@ function onDbl(e){
     if(hit.kind==="text"){ openEditorFor(hit); return; }
     let cleared=false;
     if(hit.kind==="dsnote" && o.noteOff){ o.noteOff=null; cleared=true; }
+    else if(hit.kind==="dsmemo" && o.memoOff){ o.memoOff=null; cleared=true; }
     else if(hit.kind==="dssize" && o.sizeOff){ o.sizeOff=null; cleared=true; }
     else if(hit.kind==="strokelabel" && o.labelOff){ o.labelOff=null; cleared=true; }
     else if(hit.kind==="customtag" && o.tagOff){ o.tagOff=null; cleared=true; }
@@ -4160,6 +4383,8 @@ function selectInMarquee(m){
       if(ps.length===1){ const p=ps[0]; hit = p.x>=r.x0&&p.x<=r.x1&&p.y>=r.y0&&p.y<=r.y1; }
       else { for(let i=0;i<ps.length-1;i++){ if(segIntersectsRect(ps[i],ps[i+1],r)){ hit=true; break; } } }
       if(hit) sel.add(o.id);
+    } else if(o.t==="underlay"){
+      continue;   // the plan is never marquee-selected: boxing runs drawn over it must not grab it
     } else {
       const b=objBounds(o);
       const tl=worldToScreen({x:b.x,y:b.y}), br=worldToScreen({x:b.x+b.w,y:b.y+b.h});
@@ -4242,6 +4467,10 @@ function commitEditor(){
     } else if(editing.kind==="dsnote"){
       if((o.notation||"")!==val) recordHistory();
       o.notation = val;
+    } else if(editing.kind==="dsmemo"){
+      const nv=val.trim();
+      if((o.memo||"")!==nv) recordHistory();
+      if(nv) o.memo=nv; else { delete o.memo; delete o.memoOff; }
     } else if(editing.kind==="text"){
       if((o.text||"")!==val) recordHistory();
       if(val.trim()===""){    // empty text deletes the box, new or existing (matches the photo page)
@@ -4278,7 +4507,8 @@ function openEditorFor(hit){
   if(editing) commitEditor();
   const o = objById(hit.objId); if(!o) return;
   // ensure label boxes are current
-  const lb = hit.box || findLabel(hit.kind, hit.objId, hit.seg);
+  // a downspout with no note yet has no memo chip to anchor on — open over its notation chip
+  const lb = hit.box || findLabel(hit.kind, hit.objId, hit.seg) || (hit.kind==="dsmemo" ? findLabel("dsnote", hit.objId) : null);
   if(!lb){ return; }
   editing = {objId:hit.objId, kind:hit.kind, seg:hit.seg};
   FE.innerHTML="";
@@ -4298,6 +4528,13 @@ function openEditorFor(hit){
     field.readOnly=true;
     hintTxt='A/B=elbows · 2/4/6=offset size · space + feet · TL=to lower (goes last)';
     // custom keypad built after FE is appended
+  } else if(hit.kind==="dsmemo"){
+    // the full system keyboard, unlike the notation keypad: this is free text
+    field=document.createElement("input");
+    field.type="text"; field.value=o.memo||""; field.maxLength=60;
+    field.placeholder="e.g. next to brick"; field.style.width="190px";
+    field.setAttribute("autocapitalize","sentences");
+    hintTxt="Downspout note — prints on the diagram. Enter or ✓ Done to finish";
   } else if(hit.kind==="stamp"){
     field=document.createElement("input");
     field.type="text"; field.value=o.text||""; field.style.width="150px"; field.style.textTransform="uppercase";
@@ -4319,7 +4556,8 @@ function openEditorFor(hit){
   FE.appendChild(field);
   const hintEl=document.createElement("div"); hintEl.className="fe-hint"; hintEl.textContent=hintTxt;
   FE.appendChild(hintEl);
-  if(hit.kind==="text"){
+  if(hit.kind==="dsmemo"){ hintEl.style.display="block"; hintEl.style.margin="5px 0 0"; hintEl.style.maxWidth="190px"; }
+  if(hit.kind==="text"||hit.kind==="dsmemo"){
     const doneBtn=document.createElement("button");
     doneBtn.textContent="✓ Done";
     doneBtn.style.cssText="display:block;margin-top:5px;width:100%;padding:7px 0;border-radius:6px;border:0;background:#1f9d55;color:#fff;font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation";
@@ -4363,15 +4601,21 @@ function openEditorFor(hit){
     // right: A, B, Done stacked
     const kpAB=document.createElement("div");
     kpAB.style.cssText="display:flex;flex-direction:column;gap:5px";
-    [["A","#1e3a52"],["B","#1e3a52"],["TL","#1e3a52"],["✓","#1f9d55"]].forEach(([k,bg])=>{
+    [["A","#1e3a52"],["B","#1e3a52"],["TL","#1e3a52"],["✎ Note","#5a4a12"],["✓","#1f9d55"]].forEach(([k,bg])=>{
       const btn=document.createElement("button");
       btn.textContent=k;
       btn.style.cssText="padding:12px 14px;border-radius:7px;border:1px solid #3a4d61;"
         +"background:"+bg+";color:#dce6ef;font-size:16px;font-weight:700;cursor:pointer;touch-action:manipulation;flex:1";
       if(k==="✓") btn.onclick=(ev)=>{ ev.preventDefault(); commitFromButton(); };
+      // swap to the note editor inside this click, so iOS will raise the keyboard for it
+      if(k==="✎ Note") btn.onclick=(ev)=>{
+        ev.preventDefault();
+        const id=editing&&editing.objId; commitEditor();
+        if(id!=null){ draw(); openEditorFor({objId:id,kind:"dsmemo"}); }
+      };
       btn.onpointerdown=(ev)=>{
         ev.preventDefault();
-        if(k==="✓"){ /* commits on click — see commitFromButton() */ }
+        if(k==="✓"||k==="✎ Note"){ /* acts on click — see commitFromButton() */ }
         else if(k==="TL"){ field.value=(field.value.replace(/\s*TL\s*$/i,"").trim()+" TL").trim().toUpperCase(); } // "to lower" — goes last, e.g. AAA 10 TL
         else { field.value=(field.value+k).toUpperCase(); }
       };
@@ -4459,6 +4703,7 @@ function buildEstimatePane(){
   const r=compute();
   const flat = P.settings.pricingMode==="flat";
   const pane=byId("paneEstimate");
+  const ncFree = P.settings.newConstruction ? new Set([...GUTTER_STYLES.map(g=>g.endKey), ...DS_STYLES.map(d=>d.outletKey)]) : null;
   let h="";
 
   h+=`<div class="sec-h">Takeoff worksheet <span class="pill auto">● live</span></div>`;
@@ -4486,7 +4731,7 @@ function buildEstimatePane(){
       const attrs=derived?` readonly tabindex="-1" title="Auto-priced from the gutter / downspout style — edit under Pricing" style="color:var(--text-soft)"`:"";
       const atMin=!derived&&rateAtMin(L.key);
       h+=`<input class="ws-price${atMin?" at-min":""}" data-price="${L.key}" value="${price}"${atMin?` title="At the minimum $${money(P.settings.minPrices[L.key]).slice(1)}/ft — set under Pricing"`:""}${attrs} inputmode="decimal">`;
-      h+=`<div class="ws-amt">${money(r.amt[L.key]||0)}</div>`;
+      h+= (ncFree&&ncFree.has(L.key)&&qty) ? `<div class="ws-amt" title="New construction — not charged">$0 · NC</div>` : `<div class="ws-amt">${money(r.amt[L.key]||0)}</div>`;
     }
     h+=`</div>`;
   }
@@ -4527,6 +4772,10 @@ function buildEstimatePane(){
   if(P.settings.payMethod==="card" && r.cardFee>0)
     h+=`<div class="totline foot"><span>Card fee (${P.settings.cardFee}%)</span><span class="v">${money(r.cardFee)}</span></div>`;
 
+  if(r.overridden){
+    h+=`<div class="totline foot"><span>Calculated price</span><span class="v" style="text-decoration:line-through;color:var(--text-soft)">${money(r.calcTurnkey)}</span></div>`;
+    h+=`<div class="totline disc"><span>Price override</span><span class="v">${money(r.turnkey)}</span></div>`;
+  }
   // same order as the PDF: deposit, then the total last
   h+=`<div class="totline foot"><span>${P.settings.depositPct}% Deposit</span><span class="v">${money(r.deposit)}</span></div>`;
   h+=`<div class="totline grand"><span>Turnkey Total</span><span class="v">${money(r.grand)}</span></div>`;
@@ -4564,6 +4813,67 @@ function fmtPhone(v){
   return "("+d.slice(0,3)+") "+d.slice(3,6)+"-"+d.slice(6);
 }
 
+/* Job details quiz: five quick questions whose answers land on the DIAGRAM as an ordinary text box
+   (flagged quiz:true) — so it prints inside the PDF diagram, and the rep can move, corner-scale,
+   recolor (default white plate) and hand-edit it like any other box. Re-running the quiz rewrites
+   that box's text but keeps where the rep put it and how they styled it. The last answers live on
+   P.meta.jobQuiz (shared: they describe the house), so the modal reopens prefilled. */
+const QUIZ_QS=[
+  {k:"gutter", label:"Gutter type", opts:[...GUTTER_STYLES.map(g=>g.label),"Other"]},
+  {k:"stories",label:"Stories",     opts:["1","2","3+"]},
+  {k:"drip",   label:"Drip edge",   opts:["Yes","No"]},
+  {k:"oneby",  label:"1x2",         opts:["Yes","No"]},
+  {k:"roof",   label:"Roof type",   opts:["Shingle","Metal","Tile","Flat","Other"]},
+];
+function quizText(a){
+  return QUIZ_QS.map(q=>{
+    let v=a[q.k]||""; if(v==="Other") v=String(a[q.k+"Other"]||"").trim()||"Other";
+    return v ? "• "+q.label+": "+v : "";
+  }).filter(Boolean).join("\n");
+}
+function openJobQuiz(){
+  const a=Object.assign({gutter:gutterStyle(P.settings.gutterType).label}, P.meta.jobQuiz||{});
+  let h=`<div class="note" style="margin-bottom:10px">The answers go on the diagram as a text box — drag it where you want it, pull a corner to resize, and set its background from the text style bar. Tap it twice to edit the wording.</div>`;
+  for(const q of QUIZ_QS){
+    h+=`<div class="fld"><label>${q.label}</label><div class="seg-toggle" style="flex-wrap:wrap">${q.opts.map(o=>`<button data-q="${q.k}" data-v="${esc(o)}" class="${a[q.k]===o?"on":""}">${esc(o)}</button>`).join("")}</div>`
+      + (q.opts.includes("Other")?`<input id="quizOther_${q.k}" type="text" placeholder="Describe…" value="${esc(a[q.k+"Other"]||"")}" style="margin-top:6px;display:${a[q.k]==="Other"?"block":"none"}">`:"")
+      + `</div>`;
+  }
+  h+=`<div style="margin-top:8px"><button class="btn-sm" id="quizDone" style="background:var(--prime);color:#fff;border-color:var(--prime)">Place on diagram</button></div>`;
+  openModal("Job details",h);
+  const b=byId("modalBody");
+  b.querySelectorAll("[data-q]").forEach(btn=>btn.onclick=()=>{
+    const k=btn.dataset.q; a[k]=(a[k]===btn.dataset.v)?"":btn.dataset.v;     // tap again to clear
+    b.querySelectorAll(`[data-q="${k}"]`).forEach(x=>x.classList.toggle("on",x.dataset.v===a[k]));
+    const oth=byId("quizOther_"+k); if(oth){ oth.style.display=a[k]==="Other"?"block":"none"; if(a[k]==="Other") oth.focus(); }
+  });
+  byId("quizDone").onclick=()=>{
+    QUIZ_QS.forEach(q=>{ const oth=byId("quizOther_"+q.k); if(oth) a[q.k+"Other"]=oth.value; });
+    P.meta.jobQuiz=a;
+    const text=quizText(a);
+    closeModal();
+    if(!text) return;
+    recordHistory();
+    let o=P.objects.find(x=>x.t==="text"&&x.quiz);
+    if(o) o.text=text;
+    else {
+      // just outside the drawing's top-left (inside page 1's frame when the rep has framed pages),
+      // so it never lands on top of a run; auto-fit then takes it in
+      const fr=(P.pres&&P.pres.pages||[])[0], bb=allBounds();
+      const at = fr ? {x:fr.x+GRID, y:fr.y+GRID}
+               : bb ? {x:bb.x-240-GRID, y:bb.y}
+               : screenToWorld({x:view.w/2-110, y:view.h/2-60});
+      o={t:"text",id:uid(),x:at.x,y:at.y,w:220,h:30,text,quiz:true,
+         fill:"#ffffff",color:"#1b2530",font:textFont,size:14,stroke:"#c2cbd4",bold:false,italic:false,border:true};
+      P.objects.push(o);
+    }
+    if(curPage!=="diagram") setPage("diagram");
+    setTool("select"); sel=new Set([o.id]); if(segSel) segSel.clear();
+    refreshAll(); buildOptbar(); saveLocal();
+    setHint("Job details placed — drag to move, pull a corner to resize, tap twice to edit.");
+  };
+}
+
 function buildJobPane(){
   const m=P.meta;
   let h="";
@@ -4574,7 +4884,12 @@ function buildJobPane(){
   h+=`<div class="row2">${fld("Phone","jiPhone",fmtPhone(m.phone),"tel")}${fld("Cell","jiCell",fmtPhone(m.cell),"tel")}</div>`;
   h+=fld("E-mail","jiEmail",m.email,"email");
   h+=`<div class="row2">${fld("Salesperson","jiSales",m.salesperson)}${fld("Salesperson phone","jiSalesPhone",fmtPhone(m.salespersonPhone),"tel")}</div>`;
+  h+=fld("Salesperson e-mail","jiSalesEmail",m.salespersonEmail,"email");
   h+=`<div class="row2">${fld("Workmanship warranty (years)","jiWarranty",m.warrantyYears,"number",'min="0" step="1" inputmode="numeric"')}<div class="fld"></div></div>`;
+  h+=`<div class="sec-h">Job details</div>`;
+  const hasQuiz=P.objects.some(x=>x.t==="text"&&x.quiz);
+  h+=`<div class="fld"><button class="btn-sm" id="jiQuiz">${hasQuiz?"✎ Redo job details quiz":"＋ Job details quiz"}</button></div>`;
+  h+=`<div class="note">Gutter type, stories, drip edge, 1x2 and roof type — placed on the diagram as a box that prints with it.</div>`;
   const brandOpts=(sel)=>BRANDS.map(b=>'<option value="'+b+'"'+(b===sel?' selected':'')+'>'+b+'</option>').join("");
   h+=`<div class="sec-h">Colors</div>`;
   h+=`<div class="fld"><label>Gutter brand</label><select id="jiGutBrand" aria-label="Gutter brand">${brandOpts(gutterBrand())}</select></div>`;
@@ -4595,7 +4910,8 @@ function buildJobPane(){
 
   const bind=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ P.meta[key]=e.value; }; };
   bind("jiName","name");bind("jiAddr","address");bind("jiGate","gateCode");bind("jiDate","date");
-  bind("jiEmail","email");bind("jiSales","salesperson");bind("jiWarranty","warrantyYears");
+  byId("jiQuiz").onclick=openJobQuiz;
+  bind("jiEmail","email");bind("jiSales","salesperson");bind("jiSalesEmail","salespersonEmail");bind("jiWarranty","warrantyYears");
   // phone fields: reformat live as (111) 111-1111 and store the formatted string
   const bindPhone=(id,key)=>{ const e=byId(id); if(!e) return; e.oninput=()=>{ const p=e.selectionStart, before=e.value; e.value=fmtPhone(e.value); P.meta[key]=e.value; if(p===before.length) e.setSelectionRange(e.value.length,e.value.length); }; e.onchange=()=>{ e.value=fmtPhone(e.value); P.meta[key]=e.value; }; };
   bindPhone("jiPhone","phone");bindPhone("jiCell","cell");bindPhone("jiSalesPhone","salespersonPhone");
@@ -4683,30 +4999,22 @@ function buildPricingPane(){
   h+=`<div class="sec-h">Misc / Demo / Labor</div>`;
   h+=fld("Lump $ (highlighted areas)","pcMisc",s.miscDemoLabor,"number",'step="1" inputmode="decimal"');
 
+  // New construction: no existing fascia to cap or cut into, so end caps and outlets aren't
+  // charged — but the crew still loads them, so the material list keeps them (see compute()).
+  h+=`<div class="sec-h">New construction</div>`;
+  h+=`<div class="fld"><div class="seg-toggle"><button data-nc="0" class="${s.newConstruction?"":"on"}">Standard</button><button data-nc="1" class="${s.newConstruction?"on":""}">New construction</button></div></div>`;
+  h+=`<div class="note">New construction prices end caps and outlets at $0 (and drops their footage allowances in flat mode). They still print on the material list.</div>`;
+
+  const rOv=compute();
+  h+=`<div class="sec-h">Price override</div>`;
+  h+=fld("Override turnkey total ($)","pcOverride",(+s.priceOverride>0)?s.priceOverride:"","number",'step="1" min="0" inputmode="decimal" placeholder="'+esc(money(rOv.calcTurnkey).replace("$",""))+'"');
+  if(rOv.overridden) h+=`<div class="totline disc" style="margin-top:4px"><span style="font-size:12px">Calculated ${money(rOv.calcTurnkey)}</span><span class="v">→ ${money(rOv.turnkey)}</span></div><div class="fld"><button class="btn-sm" id="pcOverrideClr">Clear override</button></div>`;
+  h+=`<div class="note">For small jobs: the estimate prints this as the Turnkey Total instead of the calculated price. Deposit and card fee follow it; the itemized add-on and discount lines are left off the PDF. Leave blank to use the calculated price.</div>`;
+
   h+=`<div class="sec-h">Deposit &amp; payment</div>`;
   h+=`<div class="row3">${fld("Deposit %","pcDep",s.depositPct,"number",'step="1" inputmode="decimal"')}${fld("Card fee %","pcCard",s.cardFee,"number",'step="0.5" inputmode="decimal"')}${fld("Amex fee %","pcAmex",s.amexFee,"number",'step="0.5" inputmode="decimal"')}</div>`;
   h+=`<div class="note">The deposit % and both card rates are printed verbatim on the estimate, so the PDF always matches these numbers.</div>`;
   h+=`<div class="fld"><label>Pay method</label><div class="seg-toggle"><button data-pay="cash" class="${s.payMethod==="cash"?"on":""}">Cash / Check</button><button data-pay="card" class="${s.payMethod==="card"?"on":""}">Card (+${s.cardFee}%)</button></div></div>`;
-
-  h+=`<div class="sec-h">Footage allowances</div>`;
-  h+=`<div class="row3">${fld("Ft / corner","pcCorner",s.footagePerCorner,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / outlet","pcOutlet",s.footagePerOutlet,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / valley","pcValley",s.footagePerValley,"number",'step="0.5" inputmode="decimal"')}</div>`;
-  h+=`<div class="row3">${fld("Ft / elbow","pcElbow",s.footagePerElbow,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / offset","pcOffset",s.footagePerOffset,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / end cap","pcEndcap",s.footagePerEndcap,"number",'step="0.5" inputmode="decimal"')}</div>`;
-  h+=`<div class="note">Corners, outlets &amp; end caps roll into gutter footage; elbows &amp; offsets roll into downspout footage. In flat $/ft mode these allowances raise the priced footage.</div>`;
-  h+=`<div class="fld"><label>Downspout material</label><div class="seg-toggle"><button data-r10="1" class="${s.roundDownspoutTo10!==false?"on":""}">Round up to 10 ft</button><button data-r10="0" class="${s.roundDownspoutTo10===false?"on":""}">Exact footage</button></div></div>`;
-  h+=`<div class="note">Downspout pipe is sold in 10 ft sections, so each downspout color/size is rounded up to the next 10 ft (e.g. 35 ft → 40 ft).</div>`;
-
-  h+=`<div class="sec-h">Drawing defaults</div>`;
-  h+=`<div class="fld"><label>Gutter system</label><select id="pcGutSys">${GUTTER_STYLES.map(g=>`<option value="${g.id}" ${s.gutterType===g.id?"selected":""}>${g.label}</option>`).join("")}</select></div>`;
-  const dsAllowed=allowedDsSizes(s.gutterType);
-  h+=`<div class="fld"><label>Default downspout size</label><select id="pcDsDef">${dsAllowed.map(id=>`<option value="${id}" ${s.defaultDownspoutSize===id?"selected":""}>${dsStyle(id).label}</option>`).join("")}</select></div>`;
-  h+=`<div class="fld"><label>Type footage → resize line to scale</label><div class="seg-toggle"><button data-roe="1" class="${s.resizeOnEdit!==false?"on":""}">On</button><button data-roe="0" class="${s.resizeOnEdit===false?"on":""}">Off</button></div></div>`;
-  h+=`<div class="note">When on, typing a segment's footage redraws that segment to scale (using your ft-per-square / calibration) and drags the rest of the run along, keeping corners connected.</div>`;
-  h+=`<div class="fld"><label>Measurement label size <span style="color:var(--text-soft);font-weight:600">${Math.round((s.labelSize||1.2)*100)}%</span></label><input type="range" id="pcLabelSize" min="0.4" max="3" step="0.1" value="${s.labelSize||1.2}" style="width:100%"></div>`;
-  h+=`<div class="note">Labels scale with zoom, so they stay proportional on big jobs and don't overlap when the diagram is fit-to-page in the PDF. Raise this if labels look too small.</div>`;
-  h+=`<div class="fld"><label>Regular (≈90°) miter style</label><div class="seg-toggle"><button data-mit="box" class="${s.regularMiter==="box"?"on":""}">Box miter</button><button data-mit="strip" class="${s.regularMiter==="strip"?"on":""}">Strip miter</button></div></div>`;
-  h+=`<div class="fld">${fld("Bay miter if ±° from 90","pcBay",s.bayDeviation,"number",'step="1" inputmode="decimal"')}</div>`;
-  h+=`<div class="note">End caps are counted automatically — one per open end. Corners and closed loops get none.</div>`;
-  h+=`<div class="note">A corner whose interior angle differs from 90° by at least this many degrees becomes a <b>bay miter</b> (sized to the gutter); otherwise it's a regular box/strip miter.</div>`;
 
   byId("panePricing").innerHTML=h;
   wirePricing();
@@ -4716,13 +5024,9 @@ function wirePricing(){
   const s=P.settings;
   byId("panePricing").querySelectorAll(".seg-toggle [data-mode]").forEach(b=>b.onclick=()=>{ s.pricingMode=b.dataset.mode; refreshAll(); });
   byId("panePricing").querySelectorAll(".seg-toggle [data-pay]").forEach(b=>b.onclick=()=>{ s.payMethod=b.dataset.pay; refreshAll(); });
-  byId("panePricing").querySelectorAll(".seg-toggle [data-mit]").forEach(b=>b.onclick=()=>{ s.regularMiter=b.dataset.mit; refreshAll(); });
-  byId("panePricing").querySelectorAll(".seg-toggle [data-r10]").forEach(b=>b.onclick=()=>{ s.roundDownspoutTo10=(b.dataset.r10==="1"); refreshAll(); });
-  byId("panePricing").querySelectorAll(".seg-toggle [data-roe]").forEach(b=>b.onclick=()=>{ s.resizeOnEdit=(b.dataset.roe==="1"); refreshAll(); });
-  { const ls=byId("pcLabelSize"); if(ls) ls.oninput=()=>{ s.labelSize=+ls.value; draw(); const lab=ls.parentElement.querySelector("span"); if(lab) lab.textContent=Math.round(s.labelSize*100)+"%"; }; }
-  { const gsy=byId("pcGutSys"); if(gsy) gsy.onchange=()=>{
-    s.gutterType=gsy.value; s.defaultDownspoutSize=gutterStyle(s.gutterType).dsDefault; buildPricingPane(); refreshAll();
-  }; }
+  byId("panePricing").querySelectorAll(".seg-toggle [data-nc]").forEach(b=>b.onclick=()=>{ recordHistory(); s.newConstruction=(b.dataset.nc==="1"); refreshAll(); });
+  { const ov=byId("pcOverride"); if(ov) ov.onchange=()=>{ recordHistory(); const v=+ov.value; s.priceOverride=(v>0?v:null); refreshAll(); }; }
+  { const oc=byId("pcOverrideClr"); if(oc) oc.onclick=()=>{ recordHistory(); s.priceOverride=null; refreshAll(); }; }
   const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; refreshAll(); }; };
   // allowance fields feed the AUTO component prices, so rebuild the pane to show the new derived $
   const numP=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; buildPricingPane(); refreshAll(); }; };
@@ -4739,10 +5043,6 @@ function wirePricing(){
   { const dn=byId("pcDiscName"); if(dn) dn.onchange=()=>{ s.discountName=dn.value.trim(); buildPricingPane(); refreshAll(); }; }
   num("pcDemo","demoRate");num("pcScrEz","screenEzRate");num("pcScrEav","screenEavRate");num("pcScrLeaf","screenLeafRate");
   num("pcMisc","miscDemoLabor");num("pcDep","depositPct");num("pcCard","cardFee");num("pcAmex","amexFee");
-  num("pcCorner","footagePerCorner");numP("pcOutlet","footagePerOutlet");numP("pcValley","footagePerValley");
-  numP("pcElbow","footagePerElbow");numP("pcOffset","footagePerOffset");numP("pcEndcap","footagePerEndcap");
-  num("pcBay","bayDeviation");
-  const dd=byId("pcDsDef"); if(dd) dd.onchange=()=>{ s.defaultDownspoutSize=dd.value; refreshAll(); };
   byId("panePricing").querySelectorAll("input.ws-price").forEach(inp=>{
     if(inp.hasAttribute("readonly")) return;     // AUTO components are derived, not hand-edited
     inp.onchange=()=>{
@@ -4952,33 +5252,59 @@ function openStampManager(){
   render();
 }
 
+/* ⚙ Settings: the rep's profile, takeoff rules and drawing behavior — never money (that's the
+   Pricing tab; this modal used to repeat deposit/card/misc and the allowances, so the same number
+   could be changed in two places). Rules and drawing settings describe the house and the tool, not
+   a priced variant, so they're written to EVERY option; gutter system stays per option, since
+   "5in vs 6in" is exactly what options get used for. */
 function openSettings(){
-  const s=P.settings;
+  const s=P.settings, prof=loadProfile();
+  const multi=OPTIONS.length>1;
+  const tog=(attr,on,a,b)=>`<div class="seg-toggle"><button data-${attr}="1" class="${on?"on":""}">${a}</button><button data-${attr}="0" class="${on?"":"on"}">${b}</button></div>`;
   let h="";
-  h+=`<div class="sec-h">Gutter system</div>`;
-  h+=`<div class="fld"><label>Default style → downspout</label><select id="stGutSys">${GUTTER_STYLES.map(g=>`<option value="${g.id}" ${s.gutterType===g.id?"selected":""}>${g.label} → ${dsStyle(g.dsDefault).short}</option>`).join("")}</select></div>`;
-  h+=`<div class="sec-h">Miters</div>`;
+  h+=`<div class="sec-h">My profile</div>`;
+  h+=`<div class="row2">${fld("Your name","stPName",prof.name)}${fld("Your phone","stPPhone",fmtPhone(prof.phone),"tel")}</div>`;
+  h+=fld("Your e-mail","stPEmail",prof.email,"email");
+  h+=`<div class="note">Saved on this device and filled in as the salesperson on every new estimate (“Prepared by” on the PDF). A job can still override it under Job Info.</div>`;
+
+  h+=`<div class="sec-h">Takeoff rules</div>`;
+  h+=`<div class="fld"><label>Gutter system${multi?" — "+esc(OPTIONS[activeOpt].name)+" only":""}</label><select id="stGutSys">${GUTTER_STYLES.map(g=>`<option value="${g.id}" ${s.gutterType===g.id?"selected":""}>${g.label}</option>`).join("")}</select></div>`;
+  const dsAllowed=allowedDsSizes(s.gutterType);
+  h+=`<div class="fld"><label>Default downspout size</label><select id="stDsDef">${dsAllowed.map(id=>`<option value="${id}" ${s.defaultDownspoutSize===id?"selected":""}>${dsStyle(id).label}</option>`).join("")}</select></div>`;
   h+=`<div class="fld"><label>Regular (≈90°) miter</label><div class="seg-toggle"><button data-mit="box" class="${s.regularMiter==="box"?"on":""}">Box</button><button data-mit="strip" class="${s.regularMiter==="strip"?"on":""}">Strip</button></div></div>`;
-  h+=`<div class="fld">${fld("Bay miter ±° from 90","stBay",s.bayDeviation,"number")}</div>`;
-  h+=`<div class="note">End caps auto-count: one per open end; corners and closed boxes get none.</div>`;
-  h+=`<div class="sec-h">Footage allowances</div>`;
-  h+=`<div class="row3">${fld("Ft / corner","stCorner",s.footagePerCorner,"number")}${fld("Ft / outlet","stOutlet",s.footagePerOutlet,"number")}${fld("Ft / valley","stValley",s.footagePerValley,"number")}</div>`;
-  h+=`<div class="row3">${fld("Ft / elbow","stElbow",s.footagePerElbow,"number")}${fld("Ft / offset","stOffset",s.footagePerOffset,"number")}${fld("Ft / end cap","stEndcap",s.footagePerEndcap,"number")}</div>`;
-  h+=`<div class="sec-h">Money</div>`;
-  h+=`<div class="row3">${fld("Deposit %","stDep",s.depositPct,"number")}${fld("Card fee %","stCard",s.cardFee,"number")}${fld("Misc/Demo $","stMisc",s.miscDemoLabor,"number")}</div>`;
-  h+=`<div class="sec-h">Diagram</div>`;
+  h+=fld("Bay miter if ±° from 90","stBay",s.bayDeviation,"number",'step="1" inputmode="decimal"');
+  h+=`<div class="note">A corner whose angle differs from 90° by at least this much becomes a <b>bay miter</b>. End caps auto-count: one per open end; corners and closed loops get none.</div>`;
+  h+=`<div class="row3">${fld("Ft / corner","stCorner",s.footagePerCorner,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / outlet","stOutlet",s.footagePerOutlet,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / valley","stValley",s.footagePerValley,"number",'step="0.5" inputmode="decimal"')}</div>`;
+  h+=`<div class="row3">${fld("Ft / elbow","stElbow",s.footagePerElbow,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / offset","stOffset",s.footagePerOffset,"number",'step="0.5" inputmode="decimal"')}${fld("Ft / end cap","stEndcap",s.footagePerEndcap,"number",'step="0.5" inputmode="decimal"')}</div>`;
+  h+=`<div class="note">Footage allowances: corners, outlets, valleys &amp; end caps roll into gutter footage; elbows &amp; offsets into downspout footage. They raise the priced footage in flat mode and set the AUTO component prices in itemized mode.</div>`;
+  h+=`<div class="fld"><label>Downspout pipe</label>${tog("r10",s.roundDownspoutTo10!==false,"Round up to 10 ft","Exact footage")}</div>`;
+
+  h+=`<div class="sec-h">Drawing</div>`;
+  h+=`<div class="fld"><label>Type footage → resize line to scale</label>${tog("roe",s.resizeOnEdit!==false,"On","Off")}</div>`;
+  h+=`<div class="fld"><label>Measurement label size <span id="stLabelPct" style="color:var(--text-soft);font-weight:600">${Math.round((s.labelSize||1.2)*100)}%</span></label><input type="range" id="stLabelSize" min="0.4" max="3" step="0.1" value="${s.labelSize||1.2}" style="width:100%"></div>`;
+  h+=`<div class="note">Auto-measure and feet-per-square live on the Gutter tool's bar, beside Calibrate — they're the drawing's scale.</div>`;
   h+=`<div class="fld"><label><input type="checkbox" id="stDsSize" ${s.showDsSize?"checked":""}> Show the downspout size tag (3×4) on the diagram</label></div>`;
-  h+=`<div class="note">These defaults drive automatic takeoff and pricing. They mirror the controls in the Pricing tab.</div>`;
-  openModal("Job defaults & rules",h);
+  h+=`<div class="fld"><label><input type="checkbox" id="stLegend" ${s.showLegend!==false?"checked":""}> Show a symbol legend on the diagram and PDF</label></div>`;
+  if(multi) h+=`<div class="note">Takeoff rules and drawing settings apply to every option in this job.</div>`;
+  openModal("Settings",h);
   const b=byId("modalBody");
-  { const gsy=byId("stGutSys"); if(gsy) gsy.onchange=()=>{ s.gutterType=gsy.value; s.defaultDownspoutSize=gutterStyle(s.gutterType).dsDefault; openSettings(); refreshAll(); }; }
-  b.querySelectorAll("[data-mit]").forEach(x=>x.onclick=()=>{ s.regularMiter=x.dataset.mit; openSettings(); refreshAll(); });
-  const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ s[key]=+e.value||0; refreshAll(); }; };
+  // write a rule to every option (P.settings is the active option's own object, so it's covered)
+  const setAll=(key,val)=>{ OPTIONS.forEach(o=>{ if(o.settings) o.settings[key]=val; }); P.settings[key]=val; };
+  const prof2=()=>{ saveProfile({name:byId("stPName").value.trim(),phone:fmtPhone(byId("stPPhone").value),email:byId("stPEmail").value.trim()}); applyProfile(P.meta); if(railPane==="job") buildJobPane(); };
+  ["stPName","stPEmail"].forEach(id=>{ byId(id).onchange=prof2; });
+  { const ph=byId("stPPhone"); ph.oninput=()=>{ ph.value=fmtPhone(ph.value); }; ph.onchange=prof2; }
+  byId("stGutSys").onchange=e=>{ s.gutterType=e.target.value; s.defaultDownspoutSize=gutterStyle(s.gutterType).dsDefault; openSettings(); buildOptbar(); refreshAll(); };
+  byId("stDsDef").onchange=e=>{ s.defaultDownspoutSize=e.target.value; refreshAll(); };
+  b.querySelectorAll("[data-mit]").forEach(x=>x.onclick=()=>{ setAll("regularMiter",x.dataset.mit); openSettings(); refreshAll(); });
+  b.querySelectorAll("[data-r10]").forEach(x=>x.onclick=()=>{ setAll("roundDownspoutTo10",x.dataset.r10==="1"); openSettings(); refreshAll(); });
+  b.querySelectorAll("[data-roe]").forEach(x=>x.onclick=()=>{ setAll("resizeOnEdit",x.dataset.roe==="1"); openSettings(); });
+  const num=(id,key)=>{ const e=byId(id); if(e) e.onchange=()=>{ setAll(key,+e.value||0); refreshAll(); }; };
   num("stBay","bayDeviation");
   num("stCorner","footagePerCorner");num("stOutlet","footagePerOutlet");num("stValley","footagePerValley");
   num("stElbow","footagePerElbow");num("stOffset","footagePerOffset");num("stEndcap","footagePerEndcap");
-  num("stDep","depositPct");num("stCard","cardFee");num("stMisc","miscDemoLabor");
-  { const dz=byId("stDsSize"); if(dz) dz.onchange=()=>{ s.showDsSize=dz.checked; buildOptbar(); refreshAll(); }; }
+  { const ls=byId("stLabelSize"); ls.oninput=()=>{ setAll("labelSize",+ls.value); byId("stLabelPct").textContent=Math.round(+ls.value*100)+"%"; draw(); }; }
+  byId("stDsSize").onchange=e=>{ setAll("showDsSize",e.target.checked); buildOptbar(); refreshAll(); };
+  byId("stLegend").onchange=e=>{ setAll("showLegend",e.target.checked); refreshAll(); };
 }
 byId("btnSettings").onclick=openSettings;
 
@@ -5075,6 +5401,7 @@ function idbLoadAll(){
 function idbGC(){
   const live=new Set((P.photos||[]).map(p=>p.id));
   if(P.meta && P.meta.titleImage) live.add(P.meta.titleImage);
+  extraBlobIds().forEach(id=>live.add(id));   // or startup would delete every plan + extra page
   [...photoBlobs.keys()].forEach(k=>{ if(!live.has(k)){ photoBlobs.delete(k); idbDel(k); } });
 }
 
@@ -5434,7 +5761,9 @@ function updatePhotoLineBar(){
    what photoSnapshot's `pscale` already does for the full-res PDF. Miss one and a stroke
    drawn on a wide card prints at a different thickness than it looked on screen. */
 const PHOTO_REF_W=520;
-function photoTextPx(st,cw){ return Math.max(18,(st.size||32)*cw/PHOTO_REF_W); }
+// No 18px floor: on a ~520px card it clamped sizes under ~18 while the full-res PDF (cw=ph.w)
+// never hit it, so small text looked stuck on screen but printed smaller.
+function photoTextPx(st,cw){ return Math.max(1,(st.size||32)*cw/PHOTO_REF_W); }
 function photoStrokePx(w,cw){ return Math.max(1,(w||7)*cw/PHOTO_REF_W); }
 function markBoundsN(st,cw,chh,pctx){
   if((st.type||"pen")==="text"){
@@ -5522,11 +5851,12 @@ byId("photoInput").onchange=e=>{ importPhotoFiles([...e.target.files]); e.target
 // memory and bloat the IndexedDB mirror and the "Save" JSON for no visible gain (the
 // biggest a photo ever prints is a half page). Cap the long edge on import.
 const PHOTO_MAX_EDGE=2000;
-function downscaleDataUrl(img,dataUrl){
+function downscaleDataUrl(img,dataUrl,maxEdge){
+  maxEdge=maxEdge||PHOTO_MAX_EDGE;
   const long=Math.max(img.naturalWidth,img.naturalHeight);
-  if(!long || long<=PHOTO_MAX_EDGE) return null;
+  if(!long || long<=maxEdge) return null;
   try{
-    const k=PHOTO_MAX_EDGE/long;
+    const k=maxEdge/long;
     const c=document.createElement("canvas");
     c.width =Math.max(1,Math.round(img.naturalWidth *k));
     c.height=Math.max(1,Math.round(img.naturalHeight*k));
@@ -5585,6 +5915,178 @@ function importPhotoFiles(files){
     rd.readAsDataURL(f);
   });
 }
+
+/* ============================================================ */
+/* DOCUMENT IMPORT  (plan underlay + extra PDF pages)          */
+/* ============================================================ */
+/* Plans and add-on pages (a financing flyer…) arrive as images or PDFs. WKWebView has no PDF
+   rasterizer and pdf.js would add megabytes to this single file, so in the app a PDF goes to
+   WebView.swift (gutterPdfImport), which renders each page with PDFKit and calls back
+   pdfImportPage() per page, then pdfImportDone()/pdfImportFailed(). A plain browser has no bridge,
+   so there a PDF is refused with a message and images still work. Every page comes back as an
+   ordinary {dataUrl,w,h,name} entry and is stored like a photo: blob store + IndexedDB, id on P. */
+const PLAN_MAX_EDGE=3000;   // a plan is read for detail when tracing — more than a photo's 2000
+const PAGE_MAX_EDGE=2200;   // a full letter page at ~200dpi
+const _pdfImports=new Map();   // import id -> {pages, name, resolve, reject}
+function pdfImportPage(id,i,n,dataUrl,w,h){ const j=_pdfImports.get(id); if(j) j.pages[i]={dataUrl,w,h,name:j.name+(n>1?" — page "+(i+1):"")}; }
+function pdfImportDone(id){ const j=_pdfImports.get(id); if(!j) return; _pdfImports.delete(id); j.resolve(j.pages.filter(Boolean)); }
+function pdfImportFailed(id,msg){ const j=_pdfImports.get(id); if(!j) return; _pdfImports.delete(id); j.reject(new Error(msg||"That PDF couldn't be read.")); }
+function isPdfFile(f){ return !!f && (f.type==="application/pdf" || /\.pdf$/i.test(f.name||"")); }
+function readAsDataURL(f){ return new Promise((res,rej)=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.onerror=()=>rej(rd.error||new Error("read failed")); rd.readAsDataURL(f); }); }
+function decodeImage(dataUrl){ return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error("That image couldn't be read.")); im.src=dataUrl; }); }
+async function readDocFile(f,maxEdge){
+  if(isPdfFile(f)){
+    const h=geNative("gutterPdfImport");
+    if(!h) throw new Error("PDF import works in the iPad app. In a browser, use a PNG or JPG of the page instead.");
+    const url=await readAsDataURL(f);
+    const id="imp"+Date.now().toString(36)+(photoIdSeq++);
+    const name=String(f.name||"document").replace(/\.pdf$/i,"");
+    const done=new Promise((resolve,reject)=>_pdfImports.set(id,{pages:[],name,resolve,reject}));
+    h.postMessage({id, data:String(url).replace(/^data:[^,]*,/,""), maxEdge});
+    // PDFKit thumbnails can come back at screen scale (2x) — re-cap to maxEdge here
+    const pages=await done;
+    for(const pg of pages){
+      try{ const im=await decodeImage(pg.dataUrl), sm=downscaleDataUrl(im,pg.dataUrl,maxEdge); if(sm){ pg.dataUrl=sm.data; pg.w=sm.w; pg.h=sm.h; } }catch(e){}
+    }
+    return pages;
+  }
+  const url=await readAsDataURL(f), im=await decodeImage(url);
+  const small=downscaleDataUrl(im,url,maxEdge);
+  return [{dataUrl:small?small.data:url, w:small?small.w:im.naturalWidth, h:small?small.h:im.naturalHeight, name:f.name||"image"}];
+}
+// one hidden picker for both purposes; the purpose decides what happens to the pages
+let docPurpose=null;
+function pickDoc(purpose){ docPurpose=purpose; byId("docInput").click(); }
+byId("docInput").onchange=async e=>{
+  const files=[...e.target.files], purpose=docPurpose; e.target.value=""; docPurpose=null;
+  if(!files.length||!purpose) return;
+  setHint("Importing…");
+  try{
+    let pages=[];
+    for(const f of files) pages=pages.concat(await readDocFile(f, purpose==="plan"?PLAN_MAX_EDGE:PAGE_MAX_EDGE));
+    if(!pages.length) throw new Error("Nothing could be read from that file.");
+    if(purpose==="plan") choosePlanPage(pages);
+    else addExtraPages(pages);
+    setHint(toolHint(tool));
+  }catch(err){
+    setHint(toolHint(tool));
+    openModal("Import", `<div class="note">${esc(err.message||String(err))}</div>`);
+  }
+};
+
+/* ---- plan underlay ----
+   {t:"underlay", id, img, x, y, w, h, opacity, locked, print} in P.objects — one per option, so a
+   Duplicate carries it. It draws under everything, takes no part in the takeoff, and is invisible to
+   hit testing while locked (the default), so tracing over it never grabs the plan. Unlocked, it can
+   be dragged and scaled from its corner. Scale comes from the existing Calibrate (world distance ->
+   feetPerSquare), so lengths traced over a calibrated plan auto-measure true. print:false keeps it
+   off the PDF — it's drawn from draw(), not drawScene(); print:true moves it into drawScene(). */
+function planOf(){ return P.objects.find(o=>o.t==="underlay")||null; }
+function choosePlanPage(pages){
+  if(pages.length===1){ setPlanImage(pages[0]); return; }
+  const h=`<div class="note" style="margin-bottom:8px">This PDF has ${pages.length} pages. Tap the one to draw on.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px">${pages.map((pg,i)=>
+      `<button data-pg="${i}" style="border:1px solid var(--line);border-radius:6px;background:#fff;padding:4px;cursor:pointer"><img src="${pg.dataUrl}" style="width:100%;display:block"><div style="font-size:11px;margin-top:3px">Page ${i+1}</div></button>`).join("")}</div>`;
+  openModal("Choose a plan page",h);
+  byId("modalBody").querySelectorAll("[data-pg]").forEach(b=>b.onclick=()=>{ closeModal(); setPlanImage(pages[+b.dataset.pg]); });
+}
+function setPlanImage(pg){
+  recordHistory();
+  const id=newPhotoId(); putBlob(id,pg.dataUrl);
+  let o=planOf();
+  if(o){ // replacing keeps the placement's width, so a calibrated scale survives a re-export of the same sheet
+    o.img=id; o.h=o.w*pg.h/Math.max(1,pg.w);
+  } else {
+    const w=view.w*0.8/cam.scale, h=w*pg.h/Math.max(1,pg.w), c=screenToWorld({x:view.w/2,y:view.h/2});
+    o={t:"underlay",id:uid(),img:id,x:c.x-w/2,y:c.y-h/2,w,h,opacity:0.5,locked:true,print:false};
+    P.objects.unshift(o);
+  }
+  refreshAll(); saveLocal(); openPlanModal();
+}
+const _planImgs=new Map();   // blob id -> decoded <img>, so a redraw never re-decodes a 3000px plan
+function drawUnderlay(o){
+  const src=photoSrc(o.img); if(!src) return;
+  let im=_planImgs.get(o.img);
+  if(!im){ im=new Image(); im.onload=()=>draw(); im.src=src; _planImgs.set(o.img,im); }
+  if(!im.complete || !im.naturalWidth) return;
+  const a=worldToScreen({x:o.x,y:o.y});
+  ctx.save();
+  ctx.globalAlpha=o.opacity==null?0.5:o.opacity;
+  ctx.drawImage(im,a.x,a.y,o.w*cam.scale,o.h*cam.scale);
+  ctx.restore();
+  if(sel.has(o.id)){
+    ctx.save(); ctx.setLineDash([6,4]); ctx.lineWidth=1.5; ctx.strokeStyle="#2b7fd0";
+    ctx.strokeRect(a.x,a.y,o.w*cam.scale,o.h*cam.scale); ctx.setLineDash([]);
+    const bx=a.x+o.w*cam.scale, by=a.y+o.h*cam.scale;
+    ctx.fillStyle="#fff"; ctx.lineWidth=2.5; ctx.fillRect(bx-7,by-7,14,14); ctx.strokeRect(bx-7,by-7,14,14);
+    ctx.restore();
+  }
+}
+function underlayHandleHit(pt){
+  if(sel.size!==1) return null;
+  const o=objById([...sel][0]); if(!o||o.t!=="underlay"||o.locked) return null;
+  const b=worldToScreen({x:o.x+o.w,y:o.y+o.h});
+  return Math.hypot(pt.x-b.x,pt.y-b.y) < (lastPtrType==="touch"?26:14) ? o : null;
+}
+function openPlanModal(){
+  const o=planOf();
+  let h="";
+  if(!o){
+    h+=`<div class="note" style="margin-bottom:10px">Bring in a site plan or blueprint (PDF or image) and trace the gutters over it. Then use <b>Set scale</b> on a dimension printed on the plan so traced lengths measure true.</div>`;
+    h+=`<button class="btn-sm" id="plImport" style="background:var(--prime);color:#fff;border-color:var(--prime)">Import plan…</button>`;
+  } else {
+    h+=`<div style="text-align:center;margin-bottom:8px"><img src="${photoSrc(o.img)}" style="max-width:100%;max-height:160px;border:1px solid var(--line);border-radius:6px"></div>`;
+    h+=`<div class="fld"><label>Opacity <span id="plOpPct" style="color:var(--text-soft);font-weight:600">${Math.round((o.opacity==null?.5:o.opacity)*100)}%</span></label><input type="range" id="plOp" min="0.1" max="1" step="0.05" value="${o.opacity==null?.5:o.opacity}" style="width:100%"></div>`;
+    h+=`<div class="fld"><label>Plan position</label><div class="seg-toggle"><button data-lk="1" class="${o.locked?"on":""}">Locked</button><button data-lk="0" class="${o.locked?"":"on"}">Move &amp; resize</button></div></div>`;
+    h+=`<div class="note">Unlocked, drag the plan to line it up and pull its corner to size it — then lock it and set the scale.</div>`;
+    h+=`<div class="fld"><label><input type="checkbox" id="plPrint" ${o.print?"checked":""}> Print the plan under the diagram on the PDF</label></div>`;
+    h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn-sm" id="plScale" style="background:var(--prime);color:#fff;border-color:var(--prime)">Set scale…</button><button class="btn-sm" id="plImport">Replace…</button><button class="btn-sm danger" id="plRemove">Remove plan</button></div>`;
+    h+=`<div class="note">Set scale: tap both ends of a dimension printed on the plan and enter its length in feet.</div>`;
+  }
+  openModal("Plan underlay",h);
+  byId("plImport").onclick=()=>{ closeModal(); pickDoc("plan"); };
+  if(!o) return;
+  const op=byId("plOp"); op.oninput=()=>{ o.opacity=+op.value; byId("plOpPct").textContent=Math.round(o.opacity*100)+"%"; draw(); }; op.onchange=()=>saveLocal();
+  byId("modalBody").querySelectorAll("[data-lk]").forEach(b=>b.onclick=()=>{
+    o.locked=(b.dataset.lk==="1"); if(o.locked) sel.delete(o.id); else { setTool("select"); sel=new Set([o.id]); }
+    openPlanModal(); draw(); saveLocal();
+  });
+  byId("plPrint").onchange=e=>{ recordHistory(); o.print=e.target.checked; saveLocal(); };
+  byId("plScale").onclick=()=>{ closeModal(); if(!o.locked){ o.locked=true; sel.delete(o.id); } startCalibration(); setHint("SET SCALE: tap one end of a dimension printed on the plan."); };
+  byId("plRemove").onclick=()=>{ recordHistory(); P.objects=P.objects.filter(x=>x!==o); sel.delete(o.id); closeModal(); refreshAll(); saveLocal(); };
+}
+
+/* ---- extra PDF pages ----
+   P.meta.extraPages: [{id,name,w,h,on}] — shared by every option, like photos, and printed as
+   full pages just before the customer info page (which always stays last). They're company
+   material more than job material, so New carries the list over to the next job (btnNew). */
+function extraPages(){ return (P.meta.extraPages=Array.isArray(P.meta.extraPages)?P.meta.extraPages:[]); }
+function addExtraPages(pages){
+  recordHistory();
+  for(const pg of pages){ const id=newPhotoId(); putBlob(id,pg.dataUrl); extraPages().push({id,name:pg.name||"Page",w:pg.w,h:pg.h,on:true}); }
+  saveLocal(); openExtraPages();
+  if(curPage==="pdf") refreshPdfView();
+}
+function openExtraPages(){
+  const list=extraPages();
+  let h=`<div class="note" style="margin-bottom:10px">Pages from a PDF or image (a financing flyer, a brochure) printed at the end of the estimate, before the customer info page. They stay with the next new estimate too.</div>`;
+  if(list.length){
+    h+=list.map((pg,i)=>`<div class="stamp-preset" style="align-items:center">
+      <img src="${photoSrc(pg.id)}" style="width:44px;height:56px;object-fit:contain;border:1px solid var(--line);border-radius:3px;background:#fff">
+      <label style="flex:1;display:flex;align-items:center;gap:6px;font-weight:700"><input type="checkbox" data-xon="${i}" ${pg.on!==false?"checked":""}>${esc(pg.name)}</label>
+      <button class="btn-sm" data-xup="${i}" ${i?"":"disabled"} title="Move up">↑</button><button class="btn-sm" data-xdn="${i}" ${i<list.length-1?"":"disabled"} title="Move down">↓</button>
+      <button class="btn-sm danger" data-xdel="${i}" title="Remove">✕</button></div>`).join("");
+  } else h+=`<div class="note">No pages added yet.</div>`;
+  h+=`<div style="margin-top:8px"><button class="btn-sm" id="xAdd" style="background:var(--prime);color:#fff;border-color:var(--prime)">＋ Add from PDF or image…</button></div>`;
+  openModal("Extra PDF pages",h);
+  const b=byId("modalBody"), done=()=>{ saveLocal(); openExtraPages(); };
+  byId("xAdd").onclick=()=>{ closeModal(); pickDoc("pages"); };
+  b.querySelectorAll("[data-xon]").forEach(c=>c.onchange=()=>{ recordHistory(); list[+c.dataset.xon].on=c.checked; saveLocal(); });
+  b.querySelectorAll("[data-xup]").forEach(c=>c.onclick=()=>{ const i=+c.dataset.xup; recordHistory(); [list[i-1],list[i]]=[list[i],list[i-1]]; done(); });
+  b.querySelectorAll("[data-xdn]").forEach(c=>c.onclick=()=>{ const i=+c.dataset.xdn; recordHistory(); [list[i+1],list[i]]=[list[i],list[i+1]]; done(); });
+  b.querySelectorAll("[data-xdel]").forEach(c=>c.onclick=()=>{ recordHistory(); list.splice(+c.dataset.xdel,1); done(); });
+}
+
 
 /* ---------- BURST CAMERA ----------------------------------------------------
    iOS's <input capture> sheet returns a single photo and closes, so documenting a
@@ -6609,12 +7111,23 @@ function serialize(withPhotos){
   const payload = {v:3, meta:P.meta, photos, nextId, stampPresets, active:activeOpt,
     options:OPTIONS.map(o=>({id:o.id,name:o.name,settings:o.settings,objects:o.objects,pres:o.pres}))};
   if(withPhotos && P.meta.titleImage) payload.titleImageData = photoSrc(P.meta.titleImage);
+  // plan underlays (any option) and extra PDF pages keep their images in the blob store too
+  if(withPhotos){ const blobs={}; extraBlobIds().forEach(id=>{ const u=photoSrc(id); if(u) blobs[id]=u; }); payload.blobs=blobs; }
   return JSON.stringify(payload, null, 2);
 }
 /* Pull any embedded image data out of a loaded save into the blob store, and give
    every photo a stable id. Handles the older formats, where each photo carried its
    own `dataUrl` and `meta.titleImage` was itself a data: URL rather than an id. */
+// blob ids that aren't photos or the title image: plan underlays across every option + extra pages
+function extraBlobIds(){
+  const ids=new Set();
+  (OPTIONS.length?OPTIONS.map(o=>o.objects):[P.objects]).forEach(objs=>(objs||[]).forEach(o=>{ if(o&&o.t==="underlay"&&o.img) ids.add(o.img); }));
+  (P.objects||[]).forEach(o=>{ if(o&&o.t==="underlay"&&o.img) ids.add(o.img); });
+  ((P.meta&&P.meta.extraPages)||[]).forEach(pg=>{ if(pg&&pg.id) ids.add(pg.id); });
+  return ids;
+}
 function absorbPhotoBlobs(d){
+  if(d && d.blobs && typeof d.blobs==="object") for(const id in d.blobs) putBlob(id,d.blobs[id]);
   (P.photos||[]).forEach(p=>{
     if(!p.id) p.id=newPhotoId();
     if(p.dataUrl){ putBlob(p.id,p.dataUrl); delete p.dataUrl; }
@@ -6654,6 +7167,7 @@ function applyLoaded(d){
   const o=OPTIONS[activeOpt];
   P.settings=o.settings; P.objects=o.objects; P.pres=o.pres;
   ensurePrices(); seedHistory(); o.history=history; o.hidx=hidx;
+  applyProfile(P.meta);
 }
 /* when running inside the native iOS shell, hand saves/prints to Swift;
    in a normal browser these return null and the web path runs unchanged */
@@ -6692,8 +7206,11 @@ byId("fileInput").onchange=e=>{
 byId("btnNew").onclick=()=>{
   captureActive();
   if(OPTIONS.some(o=>o.objects&&o.objects.length)||(P.photos&&P.photos.length)){ if(!confirm("Start a new estimate? Unsaved changes will be lost.")) return; }
-  P=defaultProject(); nextId=1; sel.clear();
-  photoBlobs.forEach((_,k)=>idbDel(k)); photoBlobs.clear();   // drop the old job's images
+  const keepPages=extraPages();   // company pages (financing flyer…) carry on to the next job
+  P=defaultProject(); applyProfile(P.meta); nextId=1; sel.clear();
+  P.meta.extraPages=keepPages;
+  const keepIds=new Set(keepPages.map(pg=>pg.id));
+  photoBlobs.forEach((_,k)=>{ if(!keepIds.has(k)){ idbDel(k); photoBlobs.delete(k); } });   // drop the old job's images
   initSingleOption(); seedHistory(); OPTIONS[0].history=history; OPTIONS[0].hidx=hidx;
   byId("paneJob").innerHTML=""; byId("panePricing").innerHTML="";
   buildRail(); buildOptbar(); buildOptionsBar(); zoomFit(); refreshAll();
@@ -6770,6 +7287,11 @@ async function photoSnapshot(ph){
    the total and there's no balance line: the total is the last, biggest thing on the page. Shared
    with pdfDiagramBox(), which counts them to size page 1's diagram box. */
 function pdfPriceRows(s,r){
+  // an overridden price prints as just the total: the add-on lines no longer sum to it
+  if(r.overridden) return [
+    s.payMethod==="card"&&r.cardFee?[`Card fee (${s.cardFee}%)`,money(r.cardFee)]:null,
+    [`${s.depositPct}% Deposit`,money(r.deposit),"dep"],
+  ].filter(Boolean);
   return [
     (+s.miscDemoLabor)?["Misc / Demo / Labor",money(s.miscDemoLabor)]:null,
     r.customTotal?["Custom products",money(r.customTotal)]:null,
@@ -6820,7 +7342,7 @@ async function buildEstimateHTML(chosen){
   const brandHead=`<div class="brand"><div class="bname">Prime Seamless Gutters &amp; Roofing</div></div>`;
   const miniHead=`<div class="brand mini"><div class="bname">Prime Seamless Gutters &amp; Roofing</div><div class="bmeta">${m.name?esc(m.name)+" &nbsp;·&nbsp; ":""}${esc(fmtDate(m.date))}</div></div>`;
   const cf=(label,val,big)=>String(val||"").trim()?`<div class="cf"><span class="cl">${label}</span><span class="cv${big?" big":""}">${esc(String(val).trim())}</span></div>`:"";
-  const rep=[m.salesperson,fmtPhone(m.salespersonPhone)].map(v=>String(v||"").trim()).filter(Boolean).join("  ·  ");
+  const rep=repLine(m);
   // Fixed 2 rows x 3 columns, read left to right: name / address / phone, then e-mail / gate / rep.
   // Cell shares the phone slot rather than taking a fourth column — the rep reads the card top-down
   // in a stacked packet, and a wider card is a shorter diagram.
@@ -6868,7 +7390,10 @@ async function buildEstimateHTML(chosen){
     const strip = stripTxt(1) ? `<div class="optstrip">${stripTxt(1)}</div>` : "";
     const boxOf=pg=>pdfBoxFor(pg,{meta:m, settings:s, r, nPages:frames.length, first:k===0, multi:showHeads});
     // customer first: the estimate is stacked in a packet, so who it's for has to read off the top edge
-    diagramPages += `<section class="p1${k>0?" pgbreak":""}">${k===0?custCard+brandHead:miniHead}${strip}${diagram?`<div class="dg" style="height:${boxOf(0).h}px">${diagram}</div>`:""}${priceBlock}</section>`;
+    // the symbol key rides in page 1's diagram box as an overlay, so it costs pdfBoxFor no height
+    const lgItems = s.showLegend!==false ? legendItems() : [];
+    const legend = lgItems.length ? `<div class="lgd-area"><div class="lgd" style="${legendPlaceStyle(opt.pres&&opt.pres.legend)}">${legendHTML(lgItems)}</div></div>` : "";
+    diagramPages += `<section class="p1${k>0?" pgbreak":""}">${k===0?custCard+brandHead:miniHead}${strip}${diagram?`<div class="dg" style="height:${boxOf(0).h}px">${diagram}${legend}</div>`:""}${priceBlock}</section>`;
     // later pages follow their own page 1, so an option's diagram pages stay together
     laterDiagrams.forEach((svg,j)=>{
       if(svg) diagramPages += `<section class="p1 pgbreak">${miniHead}<div class="optstrip">${stripTxt(j+2)}</div><div class="dg" style="height:${boxOf(1).h}px">${svg}</div></section>`;
@@ -6891,6 +7416,7 @@ async function buildEstimateHTML(chosen){
   const photos = photoURLs.filter(Boolean);
   let photosHTML="";
   if(photos.length){ photosHTML=`<h3 class="sec photo-head">Job Photos</h3>`; for(let i=0;i<photos.length;i+=4){ const cells=photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join(""); photosHTML+=`<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`; } }
+  const extraPagesHTML = extraPages().filter(pg=>pg.on!==false&&photoSrc(pg.id)).map(pg=>`<div class="info-page"><img src="${photoSrc(pg.id)}"></div>`).join("");
   const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
 
   const wYears = String(m.warrantyYears||"").trim();
@@ -6930,6 +7456,10 @@ async function buildEstimateHTML(chosen){
     .dg{position:relative;box-sizing:border-box;margin-top:9px;border:1px solid #d9e0e7;border-radius:6px;overflow:hidden}
     /* the svg's own preserveAspectRatio (meet) fits portrait and landscape houses into the box */
     .dg svg{position:absolute;left:0;top:0;width:100%;height:100%;display:block}
+    /* placement is inline (legendPlaceStyle); the area insets it so a flush legend keeps a margin */
+    .dg .lgd-area{position:absolute;inset:6px;pointer-events:none}
+    .dg .lgd{position:absolute;background:rgba(255,255,255,.92);border:1px solid #d9e0e7;border-radius:5px;padding:4px 7px;white-space:nowrap}
+    .dg .lgd svg{position:static;width:24px;height:14px}
     .price{display:flex;gap:18px;align-items:flex-end;margin-top:9px;break-inside:avoid;page-break-inside:avoid}
     .summary{flex:1;min-width:0}
     .stats{display:flex;gap:8px;margin-top:4px}
@@ -6993,6 +7523,7 @@ async function buildEstimateHTML(chosen){
     ${warrantyHTML}
     ${photosHTML}
     ${colorChartHTML}
+    ${extraPagesHTML}
     ${infoPageHTML}
     <button class="noprint" onclick="window.print()" style="padding:10px 16px;background:#c8202a;color:#fff;border:0;border-radius:8px;font-weight:700;cursor:pointer">Print this estimate</button>
     </body></html>`;
@@ -7039,6 +7570,7 @@ async function refreshPdfView(){
   const crowd=diagramCrowded(), pb=byId("pdfPagesBtn");
   pb.classList.toggle("attn",crowd);
   pb.textContent=crowd?"⚠ Crowded diagram — set pages":"▭ Diagram pages";
+  byId("pdfLegendBtn").textContent = P.settings.showLegend===false ? "◳ Legend (hidden)" : "◳ Legend";
   pb.title=crowd?"This job is big for one page — frame it across two diagram pages so the labels stay readable":"Choose what each PDF diagram page shows";
   const seq=++pdfSeq;
   const chosen=OPTIONS.map((o,i)=>i).filter(i=>!pdfOptOff.has(String(OPTIONS[i].id)));
@@ -7191,6 +7723,93 @@ function openSignModal(){
   setRole(role); renderList();
 }
 byId("pdfPagesBtn").onclick=()=>{ setPage("diagram"); setTool("pages"); };
+byId("pdfExtraBtn").onclick=()=>openExtraPages();
+byId("pdfLegendBtn").onclick=()=>openLegendArranger();
+
+/* The PDF on screen is a native PDFView in the app — HTML in it can't be dragged — so the legend is
+   arranged here instead: a modal replays page 1's diagram box at its real PDF size (scaled to fit)
+   with the same legend markup and placement CSS the PDF uses, the rep drags it / pulls its corner,
+   and Done stores it on that option's P.pres.legend and rebuilds the PDF. What's arranged is what
+   prints, because both read legendPlaceStyle(). */
+function openLegendArranger(optIdx){
+  captureActive();
+  const oi = optIdx==null ? activeOpt : optIdx, opt=OPTIONS[oi]; if(!opt) return;
+  const sS=P.settings, sO=P.objects;
+  P.settings=opt.settings; P.objects=opt.objects; ensurePrices();
+  let svg="", items=[], box=null;
+  try{
+    const frames=(opt.pres&&opt.pres.pages)||[];
+    svg=diagramSVG(frames[0]); items=legendItems();
+    box=pdfBoxFor(0,{meta:P.meta, settings:P.settings, r:compute(), nPages:frames.length, first:true, multi:OPTIONS.length>1});
+  } finally { P.settings=sS; P.objects=sO; ensurePrices(); }
+  const L=Object.assign({},(opt.pres&&opt.pres.legend)||LEGEND_DEFAULT);
+  const pick = OPTIONS.length>1 ? `<div class="fld"><label>Option</label><select id="lgOpt">${OPTIONS.map((o,i)=>`<option value="${i}"${i===oi?" selected":""}>${esc(o.name)}</option>`).join("")}</select></div>` : "";
+  const noLegend = opt.settings.showLegend===false || !items.length;
+  let h=pick;
+  if(noLegend){
+    const off=opt.settings.showLegend===false;
+    h+=`<div class="note">${off?"The legend is hidden on the diagram and the PDF.":"Nothing on this option's drawing needs a legend yet."}</div>`;
+    if(off) h+=`<div style="margin-top:8px"><button class="btn-sm" id="lgShow" style="background:var(--prime);color:#fff;border-color:var(--prime)">Show legend</button></div>`;
+    openModal("Arrange legend",h);
+    const sh=byId("lgShow"); if(sh) sh.onclick=()=>{ setLegendShown(true); openLegendArranger(oi); };
+  } else {
+    h+=`<div class="note" style="margin-bottom:8px">Drag the legend clear of the drawing; pull its blue corner to resize. This is page 1's diagram as it prints.</div>`;
+    h+=`<div id="lgFit" style="position:relative;width:100%;overflow:hidden;border-radius:6px;background:#e9eef3">
+      <div id="lgStage" style="position:absolute;left:0;top:0;width:${box.w}px;height:${box.h}px;transform-origin:0 0;background:#fff;border:1px solid #d9e0e7;border-radius:6px;overflow:hidden">
+        <div class="lg-dg">${svg}</div>
+        <div id="lgArea" style="position:absolute;inset:6px">
+          <div id="lgBox" style="position:absolute;background:rgba(255,255,255,.92);border:1.5px dashed #2b7fd0;border-radius:5px;padding:4px 7px;white-space:nowrap;cursor:move;touch-action:none;${legendPlaceStyle(L)}">${legendHTML(items)}
+            <div id="lgGrip" style="position:absolute;right:-9px;bottom:-9px;width:18px;height:18px;background:#fff;border:2.5px solid #2b7fd0;border-radius:3px;cursor:nwse-resize;touch-action:none"></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    h+=`<div style="display:flex;gap:6px;margin-top:10px"><button class="btn-sm" id="lgDone" style="background:var(--prime);color:#fff;border-color:var(--prime)">Done</button><button class="btn-sm" id="lgReset">Reset</button><div style="flex:1"></div><button class="btn-sm danger" id="lgHide">Hide legend</button></div>`;
+    openModal("Arrange legend",h);
+    const fit=byId("lgFit"), stage=byId("lgStage"), area=byId("lgArea"), lg=byId("lgBox"), grip=byId("lgGrip");
+    const k=Math.min(1,(fit.clientWidth||520)/box.w);
+    stage.style.transform=`scale(${k})`; fit.style.height=Math.ceil(box.h*k)+"px";
+    // legend's unscaled size, the area's size — all in PDF px (the preview's own units)
+    const dims=()=>({lw:lg.offsetWidth, lh:lg.offsetHeight, aw:area.clientWidth, ah:area.clientHeight});
+    // set each property from the same legendPlaceStyle() string the PDF prints — the browser
+    // re-serializes cssText, so editing it as text doesn't round-trip
+    const paint=()=>{ legendPlaceStyle(L).split(";").forEach(d=>{ const i=d.indexOf(":"); lg.style.setProperty(d.slice(0,i),d.slice(i+1)); }); };
+    let drag=null;
+    const down=(mode)=>ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      const d=dims();
+      drag={mode, x0:ev.clientX, y0:ev.clientY, L0:Object.assign({},L), d};
+      (ev.target.setPointerCapture&&ev.target.setPointerCapture(ev.pointerId));
+    };
+    const move=ev=>{
+      if(!drag) return;
+      const dx=(ev.clientX-drag.x0)/k, dy=(ev.clientY-drag.y0)/k, {lw,lh,aw,ah}=drag.d, L0=drag.L0;
+      if(drag.mode==="move"){
+        // current scaled top-left, moved by the finger, re-expressed as a fraction of free space
+        const sw=lw*L0.s, sh=lh*L0.s, fx=Math.max(1,aw-sw), fy=Math.max(1,ah-sh);
+        L.x=Math.min(1,Math.max(0,(L0.x*(aw-sw)+dx)/fx));
+        L.y=Math.min(1,Math.max(0,(L0.y*(ah-sh)+dy)/fy));
+      } else {
+        // the grip is the bottom-right corner: grow by the larger of the two drags, never past the area
+        const ns=L0.s*Math.max((lw*L0.s+dx)/(lw*L0.s),(lh*L0.s+dy)/(lh*L0.s));
+        L.s=Math.min(3,Math.max(0.6,ns,0),aw/lw,ah/lh);
+      }
+      paint();
+    };
+    const up=()=>{ drag=null; };
+    lg.addEventListener("pointerdown",down("move")); grip.addEventListener("pointerdown",down("size"));
+    [lg,grip].forEach(el=>{ el.addEventListener("pointermove",move); el.addEventListener("pointerup",up); el.addEventListener("pointercancel",up); });
+    byId("lgReset").onclick=()=>{ Object.assign(L,LEGEND_DEFAULT); paint(); };
+    byId("lgHide").onclick=()=>{ closeModal(); setLegendShown(false); };   // closeModal rebuilds the PDF without it
+    byId("lgDone").onclick=()=>{
+      recordHistory();
+      opt.pres.legend=ensureLegendPlace(L);
+      if(oi===activeOpt) P.pres=opt.pres;
+      saveLocal(); closeModal();   // closeModal rebuilds the PDF View and re-shows the native PDF
+    };
+  }
+  const sel_=byId("lgOpt"); if(sel_) sel_.onchange=()=>openLegendArranger(+sel_.value);
+}
 byId("pdfShare").onclick=()=>pdfExport("share");
 byId("pdfPrint").onclick=()=>pdfExport("print");
 byId("btnPrint").onclick=()=>setPage("pdf");
@@ -7253,7 +7872,15 @@ refreshAll=function(){ _origRefreshAll(); scheduleSave(); if(curPage==="pdf") re
 /* ============================================================ */
 function init(){
   ensurePrices();
-  if(!loadLocal()){ initSingleOption(); seedHistory(); }
+  { const lg=byId("diagLegend");
+    // the key sits over the canvas: its taps must not start a drawing or a marquee underneath
+    lg.addEventListener("pointerdown",e=>e.stopPropagation());
+    lg.onclick=e=>{
+      e.stopPropagation();
+      if(e.target.closest("[data-lghide]")){ setLegendShown(false); return; }
+      legendCollapsed=!legendCollapsed; legendSig=""; updateLegendOverlay();
+    }; }
+  if(!loadLocal()){ applyProfile(P.meta); initSingleOption(); seedHistory(); }
   // The autosave holds only photo ids; the images come back from IndexedDB.
   idbLoadAll().then(()=>{
     idbGC();                                     // drop images no longer referenced

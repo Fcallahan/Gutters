@@ -71,7 +71,9 @@ visible rail pane) or `draw()` for canvas-only changes. `recordHistory()` *befor
 snapshots for undo.
 
 **Everything drawn is one flat `P.objects` array** discriminated by `o.t`: `gutter`, `ds`
-(downspout), `valley`, `splash`, `custom`, `demo`, `screen`, `text`, `arrow`, `stamp`, `hl`.
+(downspout), `valley`, `splash`, `custom`, `demo`, `screen`, `text`, `arrow`, `stamp`, `hl`, `underlay` (a plan image to trace over —
+see **Plan underlay**). A `ds` may carry `memo` (free-text note like "next to brick", its own chip and
+`memoOff`), kept apart from `notation` so `parseDS` never sees words.
 Line-ish objects carry `pts` (world coords) plus a parallel `lengths` array — one entry per
 *segment*, so `lengths.length === pts.length - 1`. Keep them in sync on any geometry edit.
 A `text` box (`{t:"text",id,x,y,w,h,text,fill,color,font,size,stroke,bold,italic,border}`) has
@@ -88,14 +90,19 @@ special-cased in `onDown`/`onUp` instead of the generic single-tap-opens-editor 
 **`compute()` is the single source of truth for the takeoff.** It walks `P.objects` and returns
 quantities (`q`), amounts, and totals; `materialList()` calls it and re-derives the same
 quantities as human-readable BOM rows. **Any pricing rule change must be made in both** or the
-worksheet and the printed estimate disagree.
+worksheet and the printed estimate disagree. Two deliberate pricing-only exceptions:
+`settings.newConstruction` zeroes end caps/outlets (and their flat-mode LF allowances) in `compute()`
+but `materialList()` still lists them; `settings.priceOverride` (>0) replaces the turnkey (`r.overridden`,
+`r.calcTurnkey`), deposit/card fee follow it, and `pdfPriceRows()` then prints only deposit + card fee.
 
 **Options are estimate variants.** `OPTIONS[]` each own their own `settings`, `objects` and
 undo `history`; `meta` (customer), `photos` and stamp presets are *shared*. `captureActive()` /
 `activate(i)` swap the live `P` between them.
 
 **Coordinates:** world units with `GRID = 20`; `cam {x, y, scale}`; `worldToScreen` /
-`screenToWorld`. Feet are derived, not stored — `P.settings.feetPerSquare` (or calibration)
+`screenToWorld`. Job-content line weights, dashes and miter marks go through `wpx(v)` (= `v*cam.scale`,
+its look at 100%), so they stay proportional to the drawing on the canvas at any zoom and in the
+PDF. Selection chrome and handles stay fixed screen px. Don't add a bare px `lineWidth` to job content. Feet are derived, not stored — `P.settings.feetPerSquare` (or calibration)
 converts via `feetToWorld` / `autoLen`.
 
 **Run connectivity is geometric, not stored.** Endpoints within `CAP_EPS` (11 world units) count
@@ -168,7 +175,9 @@ mark type untouched, so scrubbing out a stray scribble can't delete a carefully 
 Shapes, lines, text and callouts are removed with Select → Delete.
 
 **Native bridge.** `geNative(name)` returns a `webkit.messageHandlers` handler or `null`, so the
-same code runs in a plain browser and in the app. `gutterSave` → iOS share sheet; `gutterPdf`
+same code runs in a plain browser and in the app. `gutterPdfImport` ({id,data:base64,maxEdge}) →
+PDFKit renders each page to JPEG and calls back `pdfImportPage()`/`pdfImportDone()`/`pdfImportFailed()`
+(DOCUMENT IMPORT banner); a browser has no PDF rasterizer, so there only images import. `gutterSave` → iOS share sheet; `gutterPdf`
 (`build`/`frame`/`hide`/`show`/`share`/`print`) → native pagination into a real PDF shown in a
 `PDFView` laid over the PDF View tab's `#pdfHost`, with Share/Print sending that same PDF data. The
 overlay sits above ALL web content, so anything modal on that tab must `hide` it first. Handlers
@@ -208,6 +217,27 @@ plate sits on top. The floating editor is `openEditorFor()`'s text branch (Diagr
 which `#photoStage` also sits inside), just computing its screen rect differently; open it
 **synchronously inside the pointer-up** that created or tapped the box, or iOS won't raise the
 keyboard.
+
+**Plan underlay + extra pages** (DOCUMENT IMPORT banner). Both store their images in the
+photo blob store by id, like photos. `{t:"underlay",img,x,y,w,h,opacity,locked,print}` is one per
+option; it's skipped by the takeoff, by marquee, and by hit testing while `locked`. `print:false`
+draws from `draw()` and `objBounds()` returns null for it, so it neither prints nor stretches the PDF
+fit. `print:true` draws inside `drawScene()`, which is why the recorder has `drawImage`. Scale comes
+from the existing Calibrate. `P.meta.extraPages` (shared, carried over by **New**) print as full
+pages just before the customer info page. `serialize(true)` embeds both under `blobs`, and
+`extraBlobIds()` keeps `idbGC()` from deleting them at startup. Add any new blob-backed field there.
+
+**Profile, settings, legend.** The rep's name/phone/e-mail live in `localStorage["primeGutterProfile"]`,
+not the job. `applyProfile()` fills only blank salesperson fields. `repLine()` builds "Prepared by"
+for both `buildEstimateHTML` and `pdfBoxFor`'s height model. The ⚙ Settings modal holds profile,
+takeoff rules and drawing settings, written to every option. The Pricing tab holds money only. Don't
+put a setting in both places. The legend (`legendItems()`/`legendHTML()`) is an HTML overlay, both on
+the stage (`#diagLegend`) and in the PDF's `.dg` box, so it costs no `pdfBoxFor` height. Page 1's
+legend placement is per option (`P.pres.legend` {x,y,s}: fractions of the box's free space + scale,
+`legendPlaceStyle()`). The native PDFView can't host draggable HTML, so PDF View's ◳ Legend opens
+`openLegendArranger()`, which replays the diagram box with that same CSS. Text boxes
+scale from their corners (size and width together) and set width from their sides. The job details
+quiz writes a normal `{t:"text",quiz:true}` box.
 
 ## Conventions
 
