@@ -343,6 +343,7 @@ input,select,textarea{font-family:inherit;font-size:13px}
   #photoBarTitle{display:none}
   #photoBar .tb-spacer{display:none}
   #photoBar .tb-btn{padding:6px 9px}
+  #photoLayoutPick .pl-lbl{display:none}
   .ptool .ptlbl{display:none}
 }
 /* contextual per-tool options — same idiom as the Diagram's #optbarWrap/#optbar, but
@@ -374,9 +375,45 @@ input,select,textarea{font-family:inherit;font-size:13px}
    wide, and the last column wraps — putting back the dead strip this layout exists to remove.
    On iOS scrollbars are overlays, so the gutter costs nothing there. */
 #photoScroll{flex:1;overflow:auto;scrollbar-gutter:stable;background:#9aa6b1;padding:18px;display:flex;flex-wrap:wrap;gap:18px;align-content:flex-start}
-.photo-card{background:#fff;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);overflow:hidden;position:relative}
-.photo-card canvas{display:block;cursor:crosshair;touch-action:none}
-.photo-card .pc-bar{display:flex;gap:6px;align-items:center;padding:7px 9px;border-top:1px solid var(--line);background:#f6f8fa}
+/* One .photo-sheet per printed photo page, slots at the PDF's own rects (photoSlotRects) scaled by
+   sheet width, so what the rep arranges here is what the customer gets. */
+.photo-sheet-wrap{display:flex;flex-direction:column;gap:6px}
+.photo-sheet-wrap.new .photo-sheet{opacity:.55;box-shadow:none;outline:2px dashed #fff;outline-offset:-2px}
+.photo-sheet{position:relative;box-sizing:border-box;background:#fff;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.ps-head{box-sizing:border-box;color:#c8202a;font-weight:700;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;overflow:hidden}
+.ps-head span{display:block;border-bottom:2px solid #f0d0d2}
+.ps-area{position:relative}
+.ps-cap{color:#26364a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:4px}
+.ps-cap span{margin-right:6px}
+.ps-pl{display:inline-flex;align-items:center;gap:3px;border:1px solid #7f8d9b;background:#e9eef3;color:#26364a;border-radius:6px;padding:3px 7px;font-weight:700;font-size:11px;cursor:pointer}
+.ps-pl.active{background:var(--prime);border-color:var(--prime);color:#fff}
+@media (pointer:coarse){ .ps-pl{padding:7px 10px;font-size:13px} }
+.photo-slot{position:absolute;display:flex;align-items:center;justify-content:center;border-radius:6px}
+.photo-slot.empty{border:2px dashed #c3ccd5;color:#8a98a6;font-size:12px;font-weight:700;box-sizing:border-box}
+.photo-slot.drop-target{outline:3px solid #2b7fd0;outline-offset:2px;background:rgba(43,127,208,.08)}
+.photo-card{position:relative;line-height:0}
+.photo-card canvas{display:block;cursor:crosshair;touch-action:none;border:1px solid #ccc;border-radius:6px}
+.photo-card.dragging{z-index:60;opacity:.85;box-shadow:0 14px 34px rgba(0,0,0,.4);border-radius:6px}
+.pc-grip,.pc-btn{line-height:1;border:0;border-radius:14px;background:rgba(20,28,38,.72);color:#fff;font-weight:800;font-size:12px;padding:6px 9px;cursor:pointer;touch-action:none}
+.pc-grip{position:absolute;top:6px;z-index:2}
+.pc-tr{position:absolute;top:6px;right:6px;z-index:2;display:flex;gap:4px}
+.pc-btn{font-size:14px;padding:4px 10px}
+.pc-btn:disabled{opacity:.35;cursor:default}
+.pc-grip{left:6px;cursor:grab}
+.pc-menu{position:absolute;top:36px;right:6px;z-index:70;display:flex;flex-direction:column;gap:2px;min-width:170px;padding:5px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.3);line-height:1.2}
+.pc-menu .pm-row{display:flex;gap:2px}
+.pc-menu button{flex:1;text-align:left;background:none;border:0;border-radius:5px;padding:8px 10px;font-weight:700;font-size:12.5px;color:var(--text);cursor:pointer;white-space:nowrap}
+.pc-menu .pm-row button{text-align:center;background:#eef1f4}
+.pc-menu button:hover{background:#e3e8ee}
+.pc-menu button.danger{color:var(--prime)}
+#photoLayoutPick .pl-btn{display:inline-flex;align-items:center;gap:4px;padding:5px 8px}
+#photoLayoutPick .pl-btn.active{background:var(--prime);border-color:var(--prime);color:#fff}
+#photoLayoutPick .pl-lbl{font-size:11px;font-weight:700;color:#9fb0c0;margin-right:2px}
+@media (pointer:coarse){
+  .pc-grip,.pc-btn{padding:9px 12px;font-size:14px}
+  .pc-menu{top:44px}
+  .pc-menu button{padding:11px 12px;font-size:14px}
+}
 .photo-empty{color:#33455a;text-align:center;margin:auto;font-weight:700}
 
 /* PDF view page — same overlay idiom as #photoStage. In the app a native PDFView is laid over
@@ -555,6 +592,13 @@ input,select,textarea{font-family:inherit;font-size:13px}
           <div class="ob-grp" style="display:flex;gap:4px;align-items:center">
             <button class="tb-btn" id="photoUndo" title="Undo (Ctrl+Z)">↶</button>
             <button class="tb-btn" id="photoRedo" title="Redo (Ctrl+Y)">↷</button>
+          </div>
+          <div class="ob-grp" id="photoLayoutPick" style="display:flex;gap:4px;align-items:center" title="Photos per PDF page">
+            <span class="pl-lbl">All pages</span>
+            <button class="tb-btn pl-btn" data-playout="1" title="All pages: 1 per page"></button>
+            <button class="tb-btn pl-btn" data-playout="2" title="All pages: 2 per page"></button>
+            <button class="tb-btn pl-btn" data-playout="3" title="All pages: 3 per page"></button>
+            <button class="tb-btn pl-btn" data-playout="4" title="All pages: 4 per page"></button>
           </div>
           <div class="tb-spacer"></div>
           <button class="tb-btn" id="btnTakePhoto" title="Open the camera">📷 Take photo</button>
@@ -1023,7 +1067,7 @@ function resize(){
   updateOptbarFades();   // rail toggle / rotation / split view can all end the overflow
   // Same events resize the photo pane; only rebuild when the column width actually moves,
   // otherwise every resize tick throws away and re-decodes every card.
-  if(curPage==="photos" && photoCardWidth()!==photoCardW) renderPhotos();
+  if(curPage==="photos" && photoSheetWidth()!==photoCardW) renderPhotos();
   draw();
   pdfSyncFrame();        // the native PDF overlay doesn't follow web layout on its own
 }
@@ -6738,23 +6782,218 @@ function drawPhotoMarks(pctx,ph,cw,chh,liveCursor){
   }
 }
 
-/* Cards used to be a fixed 520px wide, so the pane only ever filled to a whole number
-   of cards and everything past that was a dead strip down the right-hand side. Instead:
-   work out how many ~520px columns fit, then share the full width out between them.
+/* PHOTO PAGE LAYOUT. Every photo sits in a fixed slot: P.meta.photoPages = [{n, ids:[photo id|null ×n]}],
+   page order = print order, a null slot prints as blank space. Pages used to be counts that photos
+   flowed through, so dragging one photo onto page 2 bumped page 2's photo back onto page 1 — now a
+   drop swaps two slots and nothing else moves. Photos on no page yet (just added, or a save from
+   before this) fill in after the last placed photo at P.meta.photoLayout per page (unset = 4, the
+   2x2 grid every job printed before this existed). Both shared, like the photos. The Photos page
+   draws each printed page as a sheet with its slots at these same rects, so the arrangement on screen
+   is the PDF's. Rects are CSS px in a PDF_PAGE.w-wide box PHOTO_AREA_H tall; each page is a
+   PHOTO_HEAD_H heading over that box, which keeps a full photo page inside PDF_BUDGET_H. */
+const PHOTO_HEAD_H=40, PHOTO_AREA_H=PDF_BUDGET_H-PHOTO_HEAD_H, PHOTO_SLOT_GAP=14;
+function photoLayout(){ const n=+P.meta.photoLayout; return n>=1&&n<=4 ? Math.round(n) : 4; }
+function photoSlotRects(n,W,H,g){
+  const hw=(W-g)/2, hh=(H-g)/2;
+  if(n===1) return [{x:0,y:0,w:W,h:H}];
+  if(n===2) return [{x:0,y:0,w:W,h:hh},{x:0,y:hh+g,w:W,h:hh}];
+  if(n===3) return [{x:0,y:0,w:W,h:hh},{x:0,y:hh+g,w:hw,h:hh},{x:hw+g,y:hh+g,w:hw,h:hh}];
+  return [{x:0,y:0,w:hw,h:hh},{x:hw+g,y:0,w:hw,h:hh},{x:0,y:hh+g,w:hw,h:hh},{x:hw+g,y:hh+g,w:hw,h:hh}];
+}
+const validPer=n=>n>=1&&n<=4&&n===Math.round(n);
+// The pages, normalized: ids that are gone or repeated become holes, empty pages drop out, unplaced
+// photos are appended. A fresh copy every call — mutate it and hand it to commitPhotoPages().
+function photoPagePlan(){
+  const def=photoLayout(), live=new Set(P.photos.map(ph=>ph.id)), seen=new Set();
+  const raw=Array.isArray(P.meta.photoPages)?P.meta.photoPages:[];
+  let pages;
+  if(raw.some(pg=>typeof pg==="number")){
+    // the earlier flow model stored a count per page: replay that flow once
+    pages=[];
+    for(let i=0,p=0;i<P.photos.length;p++){ const n=validPer(+raw[p])?+raw[p]:def; pages.push({n,ids:P.photos.slice(i,i+n).map(ph=>ph.id)}); i+=n; }
+  } else pages=raw.map(pg=>({n:validPer(+(pg&&pg.n))?+pg.n:def, ids:(pg&&Array.isArray(pg.ids))?pg.ids:[]}));
+  for(const pg of pages){
+    const ids=[];
+    for(let j=0;j<pg.n;j++){ const id=pg.ids[j]; if(id!=null&&live.has(id)&&!seen.has(id)){ seen.add(id); ids.push(id); } else ids.push(null); }
+    pg.ids=ids;
+  }
+  pages=pages.filter(pg=>pg.ids.some(id=>id!=null));
+  for(const ph of P.photos){
+    if(seen.has(ph.id)) continue;
+    let last=pages[pages.length-1], j=-1;
+    if(last){ let k=last.ids.length-1; while(k>=0&&last.ids[k]==null) k--; j=k+1<last.n?k+1:-1; }   // only after its last photo: a hole the rep left stays
+    if(j<0){ last={n:def,ids:Array(def).fill(null)}; pages.push(last); j=0; }
+    last.ids[j]=ph.id; seen.add(ph.id);
+  }
+  return pages;
+}
+function commitPhotoPages(pages){
+  cancelPhotoLine(); recordHistory();
+  P.meta.photoPages=pages.filter(pg=>pg.ids.some(id=>id!=null));
+  saveLocal(); renderPhotos();
+}
+const PHOTO_LAYOUT_SVG={
+  1:'<rect x="1" y="1" width="10" height="14" rx="1"/>',
+  2:'<rect x="1" y="1" width="10" height="6.5" rx="1"/><rect x="1" y="8.5" width="10" height="6.5" rx="1"/>',
+  3:'<rect x="1" y="1" width="10" height="6.5" rx="1"/><rect x="1" y="8.5" width="4.5" height="6.5" rx="1"/><rect x="6.5" y="8.5" width="4.5" height="6.5" rx="1"/>',
+  4:'<rect x="1" y="1" width="4.5" height="6.5" rx="1"/><rect x="6.5" y="1" width="4.5" height="6.5" rx="1"/><rect x="1" y="8.5" width="4.5" height="6.5" rx="1"/><rect x="6.5" y="8.5" width="4.5" height="6.5" rx="1"/>',
+};
+const photoLayoutIcon=n=>'<svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">'+PHOTO_LAYOUT_SVG[n]+'</svg>'+n;
+// toolbar: repaginates every photo, in print order, at n per page (holes close up)
+function setPhotoLayout(n){
+  const plan=photoPagePlan(), order=plan.flatMap(pg=>pg.ids).filter(id=>id!=null), pages=[];
+  for(let i=0;i<order.length;i+=n){ const ids=order.slice(i,i+n); while(ids.length<n) ids.push(null); pages.push({n,ids}); }
+  if(photoLayout()===n && JSON.stringify(pages)===JSON.stringify(plan)) return;
+  P.meta.photoLayout=n; commitPhotoPages(pages);
+}
+// one page. Growing adds empty slots; shrinking packs its photos and moves the ones that no longer
+// fit to a new page right after it (sized to them), so no other page changes
+function setPhotoPageLayout(p,n){
+  const pages=photoPagePlan(), pg=pages[p];
+  if(!pg || pg.n===n) return;
+  if(n>pg.n) pg.ids=pg.ids.concat(Array(n-pg.n).fill(null));
+  else {
+    const photos=pg.ids.filter(id=>id!=null), over=photos.slice(n);
+    pg.ids=photos.slice(0,n); while(pg.ids.length<n) pg.ids.push(null);
+    if(over.length) pages.splice(p+1,0,{n:over.length,ids:over});
+  }
+  pg.n=n; commitPhotoPages(pages);
+}
+// lit only when every page shares one layout
+function updatePhotoLayoutPick(){
+  const ns=new Set(photoPagePlan().map(pg=>pg.n));
+  const n=ns.size===1?[...ns][0]:(ns.size?0:photoLayout());
+  document.querySelectorAll("#photoLayoutPick [data-playout]").forEach(b=>b.classList.toggle("active",+b.dataset.playout===n));
+}
+document.querySelectorAll("#photoLayoutPick [data-playout]").forEach(b=>{ b.innerHTML=photoLayoutIcon(+b.dataset.playout); b.onclick=()=>setPhotoLayout(+b.dataset.playout); });
+// swap two slots' contents ({p,j}; p===pages.length is the blank new-page sheet). Onto an empty slot
+// that's a move; onto a photo, the two trade places. Nothing else shifts.
+function swapPhotoSlots(a,b){
+  const pages=photoPagePlan();
+  if(b.p>=pages.length){ const n=photoLayout(); pages.push({n,ids:Array(n).fill(null)}); }
+  const A=pages[a.p], B=pages[b.p];
+  if(!A || !B || (a.p===b.p && a.j===b.j) || a.j>=A.n || b.j>=B.n) return;
+  [A.ids[a.j],B.ids[b.j]]=[B.ids[b.j],A.ids[a.j]];
+  commitPhotoPages(pages);
+}
+// ⋯ menu: trade places with the previous/next photo in print order
+function photoNeighborSwap(id,dir){
+  const pos=[]; photoPagePlan().forEach((pg,p)=>pg.ids.forEach((x,j)=>{ if(x!=null) pos.push({p,j,id:x}); }));
+  const i=pos.findIndex(q=>q.id===id), o=pos[i+dir];
+  if(i>=0 && o) swapPhotoSlots(pos[i],o);
+}
+
+/* Sheets used to be cards a fixed 520px wide, so the pane only ever filled to a whole number of
+   them and everything past that was a dead strip down the right-hand side. Instead: work out how
+   many ~PHOTO_SHEET_TARGET columns fit, then share the full width out between them.
    PHOTO_GAP must match #photoScroll's `gap`. */
-const PHOTO_CARD_TARGET=520, PHOTO_GAP=18;
-let photoCardW=0;                  // last width laid out, so a resize only rebuilds on a real change
-function photoCardWidth(){
+const PHOTO_SHEET_TARGET=560, PHOTO_GAP=18, PHOTO_SHEET_PAD=24;
+let photoCardW=0;                  // last sheet width laid out, so a resize only rebuilds on a real change
+function photoSheetWidth(){
   const scroll=byId("photoScroll");
   // clientWidth is 0 while the photo page is hidden; fall back so an off-screen
-  // renderPhotos() (loading a job, switching options) doesn't lay out 120px cards.
-  if(!scroll || !scroll.clientWidth) return PHOTO_CARD_TARGET;
+  // renderPhotos() (loading a job, switching options) doesn't lay out 120px sheets.
+  if(!scroll || !scroll.clientWidth) return PHOTO_SHEET_TARGET;
   const cs=getComputedStyle(scroll);
   const pad=(parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0);
   const avail=Math.max(160, scroll.clientWidth-pad);
-  const cols=Math.max(1, Math.floor((avail+PHOTO_GAP)/(PHOTO_CARD_TARGET+PHOTO_GAP)));
+  const cols=Math.max(1, Math.floor((avail+PHOTO_GAP)/(PHOTO_SHEET_TARGET+PHOTO_GAP)));
   return Math.floor((avail-(cols-1)*PHOTO_GAP)/cols);
 }
+
+/* Drag a photo by its numbered grip onto another slot (any sheet) to reorder. Hit-tests slot rects
+   rather than elementFromPoint because the dragged card is under the finger. The pane auto-scrolls
+   near its edges, clamped to the height at drag start: the translated card counts as scrollable
+   overflow, so unclamped it kept growing the pane it was scrolling. */
+let photoDrag=null;
+function photoDragStart(ev,card){
+  if(ev.button>0) return;
+  ev.preventDefault(); ev.stopPropagation();
+  closePhotoMenu(); cancelPhotoLine();
+  const sc=byId("photoScroll");
+  ev.currentTarget.setPointerCapture(ev.pointerId);
+  photoDrag={card,x0:ev.clientX,y0:ev.clientY,s0:sc.scrollTop,maxS:sc.scrollHeight-sc.clientHeight,
+             cx:ev.clientX,cy:ev.clientY,target:null,raf:0};
+  card.classList.add("dragging");
+  const tick=()=>{ if(!photoDrag) return; photoDragUpdate(); photoDrag.raf=requestAnimationFrame(tick); };
+  photoDrag.raf=requestAnimationFrame(tick);
+}
+function photoDragMove(ev){ if(photoDrag){ photoDrag.cx=ev.clientX; photoDrag.cy=ev.clientY; } }
+function photoDragUpdate(){
+  const d=photoDrag, sc=byId("photoScroll"), r=sc.getBoundingClientRect(), edge=60;
+  let st=sc.scrollTop;
+  if(d.cy<r.top+edge) st-=Math.ceil((r.top+edge-d.cy)/4);
+  else if(d.cy>r.bottom-edge) st+=Math.ceil((d.cy-(r.bottom-edge))/4);
+  sc.scrollTop=Math.max(0,Math.min(d.maxS,st));
+  d.card.style.transform=`translate(${d.cx-d.x0}px,${d.cy-d.y0+sc.scrollTop-d.s0}px)`;
+  let hit=null;
+  sc.querySelectorAll(".photo-slot").forEach(s=>{
+    if(s===d.card.parentElement) return;
+    const b=s.getBoundingClientRect();
+    if(d.cx>=b.left&&d.cx<=b.right&&d.cy>=b.top&&d.cy<=b.bottom) hit=s;
+  });
+  if(hit!==d.target){ if(d.target) d.target.classList.remove("drop-target"); d.target=hit; if(hit) hit.classList.add("drop-target"); }
+}
+function photoDragEnd(commit,ev){
+  const d=photoDrag; if(!d) return;
+  // a quick flick can lift before the next frame has hit-tested, so test where it lifted
+  if(commit){ if(ev){ d.cx=ev.clientX; d.cy=ev.clientY; } photoDragUpdate(); }
+  photoDrag=null; cancelAnimationFrame(d.raf);
+  d.card.classList.remove("dragging"); d.card.style.transform="";
+  if(d.target) d.target.classList.remove("drop-target");
+  if(!commit || !d.target) return;
+  const a=d.card.parentElement.dataset, b=d.target.dataset;
+  swapPhotoSlots({p:+a.p,j:+a.j},{p:+b.p,j:+b.j});
+}
+
+// per-photo ⋯ menu: zoom, undo/clear marks, move, remove — what the old card footer held,
+// moved off the photo so the sheet's slots stay the printed size
+/* Per-photo undo/redo on each photo: pops/re-pushes that photo's last mark, unlike the toolbar's
+   global undo. The redo stack lives off P (keyed by photo id) and an entry only replays while the
+   photo still has the mark count it had right after that undo — drawing a new mark there (count
+   grows) drops the redo, as any editor does. A global undo can restore a mark redo still holds, so
+   an id already on the photo is skipped rather than duplicated. */
+const photoMarkRedos=new Map();   // ph.id -> [{mark, at}]
+function photoMarkUndo(ph){
+  if(!ph.strokes.length) return;
+  recordHistory();
+  const mark=ph.strokes.pop(); photoSelMarks.delete(mark);
+  const st=photoMarkRedos.get(ph.id)||[]; st.push({mark,at:ph.strokes.length}); photoMarkRedos.set(ph.id,st);
+  saveLocal(); updatePhotoSelBar(); buildPhotoOptbar();
+}
+function photoMarkCanRedo(ph){
+  const st=photoMarkRedos.get(ph.id);
+  while(st && st.length && st[st.length-1].at!==ph.strokes.length) st.pop();   // stale: the photo changed since
+  return !!(st && st.length);
+}
+function photoMarkRedo(ph){
+  if(!photoMarkCanRedo(ph)) return;
+  const {mark}=photoMarkRedos.get(ph.id).pop();
+  if(ph.strokes.some(m=>m.id===mark.id)) return;
+  recordHistory(); ph.strokes.push(mark); saveLocal();
+}
+let photoMenuEl=null;
+function closePhotoMenu(){ if(photoMenuEl){ photoMenuEl.remove(); photoMenuEl=null; } }
+function openPhotoMenu(card,items){
+  const was=photoMenuEl && photoMenuEl.parentElement===card;
+  closePhotoMenu(); if(was) return;    // second tap on ⋯ closes it
+  const m=document.createElement("div"); m.className="pc-menu";
+  for(const it of items){
+    if(!it) continue;
+    const row=Array.isArray(it[0]) ? it : [it];
+    const host=row.length>1 ? m.appendChild(Object.assign(document.createElement("div"),{className:"pm-row"})) : m;
+    for(const [label,fn,cls,keep] of row){
+      const b=document.createElement("button"); b.textContent=label; if(cls) b.className=cls;
+      b.onclick=ev=>{ ev.stopPropagation(); if(!keep) closePhotoMenu(); fn(); };
+      host.appendChild(b);
+    }
+  }
+  m.addEventListener("pointerdown",ev=>ev.stopPropagation());
+  card.appendChild(m); photoMenuEl=m;
+}
+if(byId("photoScroll")) byId("photoScroll").addEventListener("pointerdown",ev=>{
+  if(photoMenuEl && !photoMenuEl.contains(ev.target) && !(ev.target.closest && ev.target.closest(".pc-more"))) closePhotoMenu();
+},{capture:true});
 
 /* ============================================================ */
 /* PHOTO CONTEXTUAL OPTIONS + PALETTE (Steps 5/6/9)            */
@@ -7013,8 +7252,10 @@ function renderPhotos(){
   // clearing the pane zeroes scrollTop; card heights are set synchronously from the canvas
   // size, so putting it back after the rebuild keeps undo/delete from jumping to the top
   const keepTop=scroll.scrollTop;
+  closePhotoMenu(); photoDragEnd(false);
   scroll.innerHTML="";
-  photoCardW=photoCardWidth();
+  photoCardW=photoSheetWidth();
+  updatePhotoLayoutPick();
   photoRedraws.clear();                       // the old cards' closures are dead
   const live=new Set((P.photos||[]).map(p=>p.id));
   [...photoImgCache.keys()].forEach(k=>{ if(!live.has(k)) photoImgCache.delete(k); });
@@ -7023,25 +7264,57 @@ function renderPhotos(){
     scroll.innerHTML=`<div class="photo-empty">No photos yet — use “Take photo” or “Add photos”.</div>`;
     return;
   }
+  // one sheet per printed page, laid out from the PDF's own rects scaled to the sheet
+  // plus one blank sheet past the end: drop a photo there to start a new page (it isn't printed)
+  const plan=photoPagePlan(), nSheets=plan.length, slotOf=new Map(), printNo=new Map();
+  const pad=Math.round(PHOTO_SHEET_PAD*photoCardW/PDF_PAGE.w), k=(photoCardW-2*pad)/PDF_PAGE.w;
+  plan.flatMap(pg=>pg.ids).filter(id=>id!=null).forEach((id,i)=>printNo.set(id,i+1));
+  for(let s=0;s<=nSheets;s++){
+    const isNew=s===nSheets, pg=isNew?{n:photoLayout(),ids:[]}:plan[s], rects=photoSlotRects(pg.n,PDF_PAGE.w,PHOTO_AREA_H,PHOTO_SLOT_GAP);
+    const wrap=document.createElement("div"); wrap.className="photo-sheet-wrap"+(isNew?" new":""); wrap.style.width=photoCardW+"px";
+    const sheet=document.createElement("div"); sheet.className="photo-sheet"; sheet.style.padding=pad+"px";
+    const head=document.createElement("div"); head.className="ps-head";
+    head.style.height=Math.round(PHOTO_HEAD_H*k)+"px"; head.style.fontSize=Math.max(8,18.7*k)+"px";
+    head.innerHTML=`<span style="padding-bottom:${Math.round(4*k)}px">Job Photos${s?" (continued)":""}</span>`;
+    const area=document.createElement("div"); area.className="ps-area"; area.style.height=Math.round(PHOTO_AREA_H*k)+"px";
+    rects.forEach((r,j)=>{
+      const id=pg.ids[j], slot=document.createElement("div"); slot.className="photo-slot"; slot.dataset.p=s; slot.dataset.j=j;
+      const x=Math.round(r.x*k), y=Math.round(r.y*k);
+      slot._w=Math.round((r.x+r.w)*k)-x; slot._h=Math.round((r.y+r.h)*k)-y;
+      Object.assign(slot.style,{left:x+"px",top:y+"px",width:slot._w+"px",height:slot._h+"px"});
+      if(id==null){ slot.classList.add("empty"); slot.textContent=isNew?"Drop here for a new page":"Empty"; }
+      else slotOf.set(id,slot);
+      area.appendChild(slot);
+    });
+    sheet.append(head,area);
+    const cap=document.createElement("div"); cap.className="ps-cap";
+    if(isNew) cap.innerHTML=`<span>New page — not printed until a photo is dropped on it</span>`;
+    else cap.innerHTML=`<span>Photo page ${s+1} of ${nSheets}</span>`+[1,2,3,4].map(n=>`<button class="ps-pl${n===pg.n?" active":""}" data-ppage="${n}" title="${n} photo${n>1?"s":""} on this page">${photoLayoutIcon(n)}</button>`).join("");
+    cap.querySelectorAll("[data-ppage]").forEach(b=>b.onclick=()=>setPhotoPageLayout(s,+b.dataset.ppage));
+    wrap.append(sheet,cap); scroll.appendChild(wrap);
+  }
   P.photos.forEach((ph,idx)=>{
     ensurePhotoMarks(ph);
     if(!ph._view) ph._view={s:1,x:0,y:0};
+    const slot=slotOf.get(ph.id), no=printNo.get(ph.id);
     const card=document.createElement("div"); card.className="photo-card";
-    // Always the full column width — clamping to the photo's own size is what left the
-    // gap. Callout text is sized off cw (photoTextPx), so it follows automatically.
-    const cw=photoCardW, chh=Math.max(1,Math.round(ph.h*(cw/ph.w)));
+    // Contain-fit into the slot, as the PDF's img does. Marks and callout text are sized off cw
+    // (photoStrokePx/photoTextPx), so they keep their printed proportion at any layout.
+    const fit=Math.min((slot._w-2)/ph.w,(slot._h-2)/ph.h);
+    const cw=Math.max(1,Math.floor(ph.w*fit)), chh=Math.max(1,Math.floor(ph.h*fit));
     const cv=document.createElement("canvas"); cv.width=cw; cv.height=chh;
     card.appendChild(cv);
-    const bar=document.createElement("div"); bar.className="pc-bar";
-    bar.innerHTML=`<span style="flex:1;font-size:11px;color:#33455a;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ph.name)}</span>
-      <button class="btn-sm" data-zin>＋</button>
-      <button class="btn-sm" data-zout>－</button>
-      <button class="btn-sm" data-zfit>Fit</button>
-      <button class="btn-sm" data-undo>Undo</button>
-      <button class="btn-sm" data-clear>Clear</button>
-      <button class="btn-sm danger" data-del>Remove</button>`;
-    card.appendChild(bar);
-    scroll.appendChild(card);
+    const grip=document.createElement("button"); grip.className="pc-grip"; grip.textContent="⠿ "+no;
+    grip.title="Drag onto another slot or page ("+ph.name+")";
+    grip.addEventListener("pointerdown",ev=>photoDragStart(ev,card));
+    grip.addEventListener("pointermove",photoDragMove);
+    grip.addEventListener("pointerup",ev=>photoDragEnd(true,ev));
+    grip.addEventListener("pointercancel",()=>photoDragEnd(false));
+    const tr=document.createElement("div"); tr.className="pc-tr";
+    tr.innerHTML=`<button class="pc-btn" data-pundo title="Undo last mark on this photo">↶</button><button class="pc-btn" data-predo title="Redo">↷</button><button class="pc-btn pc-more" title="Photo options">⋯</button>`;
+    const undoB=tr.querySelector("[data-pundo]"), redoB=tr.querySelector("[data-predo]"), more=tr.querySelector(".pc-more");
+    card.append(grip,tr);
+    slot.appendChild(card);
 
     const V=ph._view;
     photoCardInfo.set(ph.id,{cv,V,cw,chh});
@@ -7074,6 +7347,7 @@ function renderPhotos(){
     }
     photoRedraws.set(ph.id, ()=>redrawPhoto());
     function redrawPhoto(cursor){
+      undoB.disabled=!ph.strokes.length && !(photoLine&&photoLine.ph===ph); redoB.disabled=!photoMarkCanRedo(ph);
       pctx.clearRect(0,0,cw,chh);
       pctx.save();
       pctx.translate(V.x,V.y); pctx.scale(V.s,V.s);
@@ -7154,9 +7428,10 @@ function renderPhotos(){
       }
       pctx.restore();
       if(V.s>1.001){
-        pctx.save();pctx.fillStyle="rgba(20,28,38,.7)";pctx.fillRect(6,6,54,18);
+        // bottom-left: the top corners belong to the grip and ⋯ buttons
+        pctx.save();pctx.fillStyle="rgba(20,28,38,.7)";pctx.fillRect(6,chh-24,54,18);
         pctx.fillStyle="#fff";pctx.font="700 11px Arial";pctx.textBaseline="middle";
-        pctx.fillText(Math.round(V.s*100)+"%",12,16);pctx.restore();
+        pctx.fillText(Math.round(V.s*100)+"%",12,chh-15);pctx.restore();
       }
     }
     function pos(ev){
@@ -7428,13 +7703,16 @@ function renderPhotos(){
     });
     cv.style.cursor = photoTool==="select" ? "default" : "crosshair";
 
-    bar.querySelector("[data-zin]").onclick=()=>zoomAt(cw/2,chh/2,1.4);
-    bar.querySelector("[data-zout]").onclick=()=>zoomAt(cw/2,chh/2,1/1.4);
-    bar.querySelector("[data-zfit]").onclick=()=>{ V.s=1;V.x=0;V.y=0; redrawPhoto(); };
-
-    bar.querySelector("[data-undo]").onclick=()=>{ if(photoLine&&photoLine.ph===ph) cancelPhotoLine(); else if(ph.strokes.length){ recordHistory(); ph.strokes.pop(); redrawPhoto(); saveLocal(); } };
-    bar.querySelector("[data-clear]").onclick=()=>{ cancelPhotoLine(); if(ph.strokes.length){ recordHistory(); ph.strokes=[]; photoSelMarks.clear(); redrawPhoto(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar(); } };
-    bar.querySelector("[data-del]").onclick=()=>{ cancelPhotoLine(); recordHistory(); P.photos.splice(idx,1); renderPhotos(); saveLocal(); };
+    undoB.onclick=()=>{ if(photoLine&&photoLine.ph===ph){ cancelPhotoLine(); return; } photoMarkUndo(ph); redrawPhoto(); };
+    redoB.onclick=()=>{ photoMarkRedo(ph); redrawPhoto(); };
+    more.onclick=ev=>{ ev.stopPropagation(); openPhotoMenu(card,[
+      // zoom stays open so ＋ can be tapped repeatedly
+      [["＋",()=>zoomAt(cw/2,chh/2,1.4),"",true],["－",()=>zoomAt(cw/2,chh/2,1/1.4),"",true],["Fit",()=>{ V.s=1;V.x=0;V.y=0; redrawPhoto(); },"",true]],
+      ["Clear marks",()=>{ cancelPhotoLine(); if(ph.strokes.length){ recordHistory(); ph.strokes=[]; photoSelMarks.clear(); redrawPhoto(); saveLocal(); updatePhotoSelBar(); buildPhotoOptbar(); } }],
+      no>1 ? ["◀ Swap with previous",()=>photoNeighborSwap(ph.id,-1)] : null,
+      no<P.photos.length ? ["Swap with next ▶",()=>photoNeighborSwap(ph.id,1)] : null,
+      ["🗑 Remove photo",()=>{ cancelPhotoLine(); recordHistory(); P.photos.splice(idx,1); renderPhotos(); saveLocal(); },"danger"],
+    ]); };
 
     // Paint now if the image was already decoded. This runs last because
     // redrawPhoto() reads state declared above but only initialised further down —
@@ -7811,9 +8089,18 @@ async function buildEstimateHTML(chosen){
   }).join("");
 
   // shared photos + info appendix
-  const photos = photoURLs.filter(Boolean);
+  // photoPagePlan's pages at photoSlotRects — the same rects the Photos page's sheets show; an empty slot
+  // (or a failed snapshot) is blank space. Left/width in % so a browser preview narrower than PDF_PAGE.w
+  // still fits; heights in px, which is what page fit hangs on.
+  const urlOf=new Map(P.photos.map((ph,i)=>[ph.id,photoURLs[i]]));
   let photosHTML="";
-  if(photos.length){ photosHTML=`<h3 class="sec photo-head">Job Photos</h3>`; for(let i=0;i<photos.length;i+=4){ const cells=photos.slice(i,i+4).map(u=>`<div class="pcell"><img src="${u}"></div>`).join(""); photosHTML+=`<div class="photo-page${i>0?" pgbreak":""}">${cells}</div>`; } }
+  { const pc=v=>r1(v*100/PDF_PAGE.w);
+    for(const pg of photoPagePlan()){
+      const rects=photoSlotRects(pg.n,PDF_PAGE.w,PHOTO_AREA_H,PHOTO_SLOT_GAP);
+      const cells=pg.ids.map((id,j)=>{ const u=id!=null&&urlOf.get(id), r=rects[j]; return u?`<div class="pcell" style="left:${pc(r.x)}%;width:${pc(r.w)}%;top:${Math.round(r.y)}px;height:${Math.round(r.h)}px"><img src="${u}"></div>`:""; }).join("");
+      if(cells) photosHTML+=`<div class="photo-sheet"><h3 class="sec">Job Photos${photosHTML?" (continued)":""}</h3><div class="photo-page" style="height:${PHOTO_AREA_H}px">${cells}</div></div>`;
+    }
+  }
   const extraPagesHTML = extraPages().filter(pg=>pg.on!==false&&photoSrc(pg.id)).map(pg=>`<div class="info-page"><img src="${photoSrc(pg.id)}"></div>`).join("");
   const infoPageHTML = `<div class="info-page"><img src="${INFO_PAGE_IMG}"></div>`;
 
@@ -7881,11 +8168,12 @@ async function buildEstimateHTML(chosen){
     .pfoot b{color:#c8202a;font-weight:800}
     .dtitle{font-size:18px;color:#1b2530;margin:0 0 10px;padding-bottom:6px;border-bottom:2.5px solid #c8202a}
     .chart-page{break-before:page;page-break-before:always}
-    .photo-head{break-before:page;page-break-before:always}
-    .photo-page{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;break-inside:avoid;page-break-inside:avoid}
-    .photo-page.pgbreak{break-before:page;page-break-before:always}
-    .pcell{display:flex;align-items:center;justify-content:center;min-height:0}
-    .photo-page img{max-width:100%;max-height:4.25in;border:1px solid #ccc;border-radius:6px;object-fit:contain}
+    /* one photo page: heading (margin-top 0, so it costs PHOTO_HEAD_H with its 10px gap) over a fixed-height box */
+    .photo-sheet{break-before:page;page-break-before:always;break-inside:avoid;page-break-inside:avoid}
+    .photo-sheet h3.sec{margin:0}
+    .photo-page{position:relative;margin-top:10px}
+    .pcell{position:absolute;display:flex;align-items:center;justify-content:center}
+    .pcell img{display:block;box-sizing:border-box;max-width:100%;max-height:100%;border:1px solid #ccc;border-radius:6px}
     .info-page{break-before:page;page-break-before:always;break-inside:avoid;page-break-inside:avoid;text-align:center;line-height:0;font-size:0}
     .info-page img{display:block;margin:0 auto;max-width:100%;max-height:9.4in;object-fit:contain}
     .colorline{font-size:13px;margin:2px 0}

@@ -139,8 +139,19 @@ auto-denies `getUserMedia`), and `mediaTypesRequiringUserActionForPlayback = []`
 preview stays black). **The simulator has no camera at all** — this path can only be tested on a
 real iPad.
 
-**Photo pane layout.** Cards are one column wide (`photoCardWidth()` splits the pane into
-~520px columns), so `#photoScroll` needs `scrollbar-gutter:stable` — `renderPhotos()` measures
+**Photo pane layout.** The Photos page is the PDF's photo pages: one `.photo-sheet` per printed
+page. Every photo has a fixed slot: `P.meta.photoPages = [{n:1..4, ids:[id|null]}]` (shared),
+page order = print order, a null slot prints blank. A drop swaps two slots (`swapPhotoSlots()`)
+and nothing else moves — deliberately, the rep asked for no auto-reflow across pages. Unplaced
+photos (new, or older saves) are appended at `P.meta.photoLayout` per page (the "All pages"
+picker, unset = 4, which also repaginates everything). Always read pages through
+`photoPagePlan()` (it normalizes stale ids/empty pages), write via `commitPhotoPages()`.
+`photoSlotRects()` gives the slot rects — `renderPhotos()` scales them onto the sheets and
+`buildEstimateHTML()` prints them.
+Each photo is contain-fit into its slot, as the PDF's `img` is. Reorder is the numbered grip
+(`photoDragStart()` → `movePhoto()`), per-photo zoom/undo/clear/remove live in its ⋯ menu.
+Sheets are one column wide (`photoSheetWidth()` splits the pane into ~560px columns), so
+`#photoScroll` needs `scrollbar-gutter:stable` — `renderPhotos()` measures
 after clearing the pane, and without a reserved gutter it sizes columns a scrollbar too wide and
 the last one wraps. Marks are stored against a 520px preview (`PHOTO_REF_W`); every renderer
 scales by `cw/PHOTO_REF_W` via `photoStrokePx()`/`photoTextPx()`. The left rail belongs to the
